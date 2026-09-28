@@ -42,6 +42,7 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 
 ## Docs
 
+- [`docs/OVERVIEW.md`](docs/OVERVIEW.md) — plain-English front door
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — ADR
 - [`docs/DISTRO-COMPARISON.md`](docs/DISTRO-COMPARISON.md) — substrate decision input; no base locked
 - [`docs/IDENTITY.md`](docs/IDENTITY.md) — SSO stub
