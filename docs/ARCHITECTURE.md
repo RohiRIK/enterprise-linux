@@ -18,9 +18,9 @@ Organizations that want Linux on **employee workstations** usually get one of:
 - Homegrown golden images that rot: no single owner for identity, harden, apps, updates, and device management.
 - DIY boxes where users install whatever and “security updates” means hope.
 
-Stock Ubuntu as a blank canvas is not enough for org fleets. IT needs a **locked, pre-hardened, curated workstation product**: strong SSO, strong MDM support, frozen core, curated apps, controlled auto-updates, and (later) a first-party plugin channel — with room to explore a **distinct** AI capability that does not exist yet (research only until it earns a ship).
+A stock distribution as a blank canvas is not enough for org fleets. IT needs a **locked, pre-hardened, curated workstation product**: strong SSO, strong MDM support, frozen core, curated apps, controlled auto-updates, and (later) a first-party plugin channel — with room to explore a **distinct** AI capability that does not exist yet (research only until it earns a ship).
 
-**Enterprise Linux (working name)** is that product. **Ubuntu 24.04 LTS is the substrate**, not the brand story.
+**Enterprise Linux (working name)** is that product. **The substrate remains under comparison**, not the brand story; see [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md).
 
 Primary user: IT / security / platform owners in M365 / Entra (or AD) shops who want Linux next to Windows under the same control plane expectations.
 
@@ -32,17 +32,17 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 
 | Pillar | Meaning |
 |---|---|
-| **Frozen core** | Pinned Ubuntu LTS; changes via this repo + CI; major upgrades = release train. |
+| **Frozen core** | Pinned chosen-substrate LTS; changes via this repo + CI; major upgrades = release train. |
 | **Strong SSO** | Org login (Entra-first) is how a machine becomes “done.” |
-| **Strong MDM support** | **Headline.** Product is designed MDM-ready for Intune / Jamf-class (or equivalent Linux management) — enroll, policy, inventory, remote actions as the target story. Specifics TBD; not “install Ubuntu and figure out MDM yourself.” |
+| **Strong MDM support** | **Headline.** Product is designed MDM-ready for Intune / Jamf-class (or equivalent Linux management) — enroll, policy, inventory, remote actions as the target story. Specifics TBD; not “install a stock distribution and figure out MDM yourself.” |
 | **Curated apps** | Org-approved app set baked and/or gated. |
 | **Locked security + automatic updates** | Pre-hardened image; controlled **automatic** security/system update path; not a DIY unpatched box. |
 | **Controlled plugin marketplace** | Optional channel of plugins **we** prepare. Concept until signing + supply chain exist. |
 | **AI direction (research)** | Explore a *distinct* AI capability that does not exist yet. Open research track — **not** AI-washing, not a ship claim. |
 
-**Non-positioning:** not “another Ubuntu remix” brand-only. Substrate = Ubuntu; product = the locked curated stack + MDM-ready control plane above it.
+**Non-positioning:** not a brand-only distro remix. Substrate = under comparison; product = the locked curated stack + MDM-ready control plane above it.
 
-**Locked ahead of time:** the default image is ready and constrained before it reaches the user — apps, harden, update policy, identity hooks, MDM hooks — not a blank DIY Ubuntu install.
+**Locked ahead of time:** the default image is ready and constrained before it reaches the user — apps, harden, update policy, identity hooks, MDM hooks — not a blank DIY install.
 
 ---
 
@@ -60,15 +60,19 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 
 ---
 
-## 4. Substrate: base options
+## 4. Substrate: candidates under comparison
 
-| Option | Role | Verdict |
+The candidate set is documented in [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md): Ubuntu 24.04 LTS, RHEL, Rocky, AlmaLinux, Debian Stable, SUSE/Leap, and a custom minimal frozen core.
+
+| Candidate lane | Role | Status |
 |---|---|---|
-| **A. Vanilla Ubuntu 24.04 LTS** | Substrate for frozen core + autoinstall / cloud-init | **Day-1 choice** |
-| **B. Rocky (RHEL-compatible)** | Later track if RHEL ABI required | Not day 1 |
-| **C. Arch (scout)** | Only with hard criterion + funded freeze mirror | **Do not adopt** by default |
+| Ubuntu 24.04 LTS | LTS workstation substrate candidate | Under comparison |
+| RHEL-compatible (RHEL, Rocky, AlmaLinux) | Enterprise-compatible substrate candidates | Under comparison |
+| Debian Stable | Stable, community substrate candidate | Under comparison |
+| SUSE / Leap | Enterprise or community substrate candidates | Under comparison |
+| Custom minimal frozen core | Full-control substrate candidate | Under comparison |
 
-**Recommendation:** Ubuntu 24.04 LTS substrate. Product value = SSO + MDM-ready design + curated apps + locked updates + (later) marketplace + AI research — not forking Ubuntu for its own sake.
+**Decision:** no substrate is locked yet. Rohi reads the comparison before choosing; there is no day-1 lock or recommendation here. Product value remains SSO + MDM-ready design + curated apps + locked updates + (later) marketplace + AI research — not any one base for its own sake.
 
 ---
 
@@ -76,7 +80,7 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 
 ### 5.1 Frozen core
 
-- Pinned LTS; repo + CI as source of truth; reproducible build ids.
+- Pinned chosen-substrate LTS; repo + CI as source of truth; reproducible build ids once the substrate is selected.
 - Opposite of rolling enthusiast desktops.
 
 ### 5.2 Strong SSO (headline)
@@ -127,8 +131,8 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 
 **In**
 
-1. Repo + ADR + README reflecting product thesis (not “just Ubuntu”).
-2. Ubuntu 24.04 autoinstall seed: pins + harden + curated app seed + update policy on.
+1. Repo + ADR + README reflecting product thesis (not “just a stock distribution”).
+2. Chosen-substrate LTS installer seed: pins + harden + curated app seed + update policy on, after the substrate decision.
 3. CI → VM-bootable artifact + checksums.
 4. Strong SSO path for one IdP (default proposal: Entra).
 5. **MDM-ready hooks** documented + stubbed (agent slot, facts, enroll doc) — **not** a live vendor integration unless Rohi greenlights a named MVP connector.
@@ -140,7 +144,7 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 - Live Intune/Jamf connector, live marketplace, shipping AI feature.
 - Custom kernel / full Secure Boot PKI beyond documenting needs.
 - Full in-house MDM product replacing vendors.
-- Rocky/Arch tracks; support SLAs; hardware guarantee matrices.
+- Additional substrate tracks before the substrate decision; support SLAs; hardware guarantee matrices.
 
 ---
 
@@ -150,6 +154,7 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 README.md
 LICENSE
 docs/ARCHITECTURE.md
+docs/DISTRO-COMPARISON.md
 docs/IDENTITY.md
 docs/HARDENING.md
 docs/IMAGE-PIPELINE.md
@@ -184,8 +189,8 @@ No ISO blobs in git.
 
 | Topic | Decision |
 |---|---|
-| Product | Locked curated org workstation — **not** DIY Ubuntu |
-| Substrate | **Ubuntu 24.04 LTS** |
+| Product | Locked curated org workstation — **not** a DIY distribution install |
+| Substrate | **Under comparison; not locked** — see [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md) |
 | Headlines | Strong **SSO** + strong **MDM support** + frozen core + locked auto-updates + curated apps |
 | Marketplace | Controlled, first-party; concept until ready |
 | AI | Distinct capability **research**; no AI-wash; no ship yet |
