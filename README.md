@@ -1,6 +1,6 @@
 # enterprise-linux
 
-Concept ADR and repo skeleton for a **locked, curated org workstation** Linux product under [RohiRIK](https://github.com/RohiRIK).
+Concept ADR and repo skeleton for a **Linux-only, locked, curated org workstation** product under [RohiRIK](https://github.com/RohiRIK).
 
 ## What
 
@@ -12,7 +12,7 @@ Not DIY Linux. **The substrate is under comparison**; the product is the stack o
 - **Curated apps** — org-approved set, baked and/or gated
 - **Locked security + automatic updates** — pre-hardened; controlled auto security/system updates
 - **Controlled plugin marketplace** — plugins *we* prepare (concept/stub; **not live**)
-- **AI direction** — research for a *distinct* capability (**not shipping**; no AI-wash)
+- **AI-for-investigation** — research for a *distinct* capability (**not shipping**; no AI-wash)
 
 Path: **CI → image (signing when keys exist) → SSO → MDM hooks → harden → curated apps → locked auto-updates**. Not a shipping OS yet.
 
@@ -29,6 +29,8 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 - No brand-only remix story (substrate ≠ product).
 - No open third-party app/plugin free-for-all.
 - No **live** MDM integration, marketplace, signed-plugin trust, or AI feature claims until each exists and is reviewed.
+- No Windows-native clients; this is a Linux-only product.
+- No Intune/Jamf badges, and no new dependencies.
 - No AI-washing (“AI OS”) or bolting a chatbot on login.
 - No building a full MDM *vendor* that replaces Intune/Jamf on day 1 — we integrate / are ready for org MDM.
 - No FedRAMP/CIS certification claims; no ISO in this repo yet.
@@ -40,6 +42,7 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 
 ## Docs
 
+- [`docs/OVERVIEW.md`](docs/OVERVIEW.md) — plain-English front door
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — ADR
 - [`docs/DISTRO-COMPARISON.md`](docs/DISTRO-COMPARISON.md) — substrate decision input; no base locked
 - [`docs/IDENTITY.md`](docs/IDENTITY.md) — SSO stub
@@ -48,7 +51,8 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 - [`docs/IMAGE-PIPELINE.md`](docs/IMAGE-PIPELINE.md) — stub
 - [`docs/CURATED-APPS.md`](docs/CURATED-APPS.md) — stub
 - [`docs/MARKETPLACE.md`](docs/MARKETPLACE.md) — concept stub (**not live**)
-- [`docs/AI-RESEARCH.md`](docs/AI-RESEARCH.md) — research stub (**no ship claim**)
+- [`docs/AI-RESEARCH.md`](docs/AI-RESEARCH.md) — AI-for-investigation research stub (**no ship claim**)
+- [`docs/FEATURE-IDEAS.md`](docs/FEATURE-IDEAS.md) — ideas-only concept backlog (**not shipped**)
 
 ## License
 

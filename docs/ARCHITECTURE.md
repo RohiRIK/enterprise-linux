@@ -3,7 +3,7 @@
 **Status:** concept ADR (not a shipping OS)  
 **Owner:** cto-max-grok  
 **Repo:** `RohiRIK/enterprise-linux`  
-**Date:** 2026-09-28 (revised: MDM headline + AI research + locked auto-updates)
+**Date:** 2026-09-28 (revised: MDM headline + AI-for-investigation research + locked auto-updates)
 
 This document is design-only. No ISO, no distro fork, no support contract claims. No live MDM connector, marketplace, or AI feature shipping yet.
 
@@ -18,7 +18,7 @@ Organizations that want Linux on **employee workstations** usually get one of:
 - Homegrown golden images that rot: no single owner for identity, harden, apps, updates, and device management.
 - DIY boxes where users install whatever and “security updates” means hope.
 
-A stock distribution as a blank canvas is not enough for org fleets. IT needs a **locked, pre-hardened, curated workstation product**: strong SSO, strong MDM support, frozen core, curated apps, controlled auto-updates, and (later) a first-party plugin channel — with room to explore a **distinct** AI capability that does not exist yet (research only until it earns a ship).
+A stock distribution as a blank canvas is not enough for org fleets. IT needs a **locked, pre-hardened, curated workstation product**: strong SSO, strong MDM support, frozen core, curated apps, controlled auto-updates, and (later) a first-party plugin channel — with room to explore a **distinct AI-for-investigation** capability that does not exist yet (research only until it earns a ship).
 
 **Enterprise Linux (working name)** is that product. **The substrate remains under comparison**, not the brand story; see [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md).
 
@@ -38,7 +38,7 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 | **Curated apps** | Org-approved app set baked and/or gated. |
 | **Locked security + automatic updates** | Pre-hardened image; controlled **automatic** security/system update path; not a DIY unpatched box. |
 | **Controlled plugin marketplace** | Optional channel of plugins **we** prepare. Concept until signing + supply chain exist. |
-| **AI direction (research)** | Explore a *distinct* AI capability that does not exist yet. Open research track — **not** AI-washing, not a ship claim. |
+| **AI-for-investigation (research)** | Explore a *distinct* AI capability that does not exist yet. Open research track — **not** AI-washing, not a ship claim. |
 
 **Non-positioning:** not a brand-only distro remix. Substrate = under comparison; product = the locked curated stack + MDM-ready control plane above it.
 
@@ -57,6 +57,7 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 - **Not** AI-washing (“AI OS”) or bolting a chatbot onto the login screen and calling it differentiation.
 - **Not** promising FedRAMP / CIS **certification** on day 1 (baselines as checklists OK).
 - **Not** building a full MDM *vendor* that replaces Intune/Jamf — we **integrate / are ready for** org MDM, not rebrand as one on day 1.
+- **Linux-only:** no Windows-native clients, no live MDM/marketplace/AI claims, no Intune/Jamf badges, and no new dependencies.
 
 ---
 
@@ -72,7 +73,7 @@ The candidate set is documented in [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md
 | SUSE / Leap | Enterprise or community substrate candidates | Under comparison |
 | Custom minimal frozen core | Full-control substrate candidate | Under comparison |
 
-**Decision:** no substrate is locked yet. Rohi reads the comparison before choosing; there is no day-1 lock or recommendation here. Product value remains SSO + MDM-ready design + curated apps + locked updates + (later) marketplace + AI research — not any one base for its own sake.
+**Decision:** no substrate is locked yet. Rohi reads the comparison before choosing; there is no day-1 lock or recommendation here. Product value remains SSO + MDM-ready design + curated apps + locked updates + (later) marketplace + AI-for-investigation research — not any one base for its own sake.
 
 ---
 
@@ -114,7 +115,7 @@ The candidate set is documented in [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md
 - Stub catalog until signing + revoke story exist.
 - Orgs may disable the channel entirely.
 
-### 5.7 AI direction (research only)
+### 5.7 AI-for-investigation (research only)
 
 - Goal: find **one distinct** capability that does not exist yet (or is not productized for org Linux workstations) — e.g. fleet-aware assist that respects MDM/SSO boundaries, offline-safe policy help, or something sharper once researched.
 - **Process:** short research notes → Rohi pick → design ADR → only then SHIP.
@@ -136,12 +137,12 @@ The candidate set is documented in [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md
 3. CI → VM-bootable artifact + checksums.
 4. Strong SSO path for one IdP (default proposal: Entra).
 5. **MDM-ready hooks** documented + stubbed (agent slot, facts, enroll doc) — **not** a live vendor integration unless Rohi greenlights a named MVP connector.
-6. Marketplace + AI: **docs / research stubs only**.
+6. Marketplace + AI-for-investigation: **docs / research stubs only**.
 7. Verify docs: VM install → SSO → updates → app seed → MDM hook checklist.
 
 **Out**
 
-- Live Intune/Jamf connector, live marketplace, shipping AI feature.
+- Live Intune/Jamf connector, live marketplace, or shipping AI-for-investigation feature.
 - Custom kernel / full Secure Boot PKI beyond documenting needs.
 - Full in-house MDM product replacing vendors.
 - Additional substrate tracks before the substrate decision; support SLAs; hardware guarantee matrices.
@@ -161,7 +162,8 @@ docs/IMAGE-PIPELINE.md
 docs/CURATED-APPS.md
 docs/MARKETPLACE.md          # concept / not live
 docs/MDM.md                  # target story + hooks; no live claim
-docs/AI-RESEARCH.md          # open questions; no ship claim
+docs/AI-RESEARCH.md          # AI-for-investigation; no ship claim
+docs/FEATURE-IDEAS.md         # ideas-only concept backlog; not shipped
 image/
 scripts/
 catalog/                     # empty
@@ -179,7 +181,7 @@ No ISO blobs in git.
 3. **Name lock:** `enterprise-linux` or short product name?
 4. **Curated app seed v0:** must-have apps on image one?
 5. **Marketplace:** stub through MVP (recommended) vs one first-party plugin proof?
-6. **AI research brief:** any constraint (must be offline? must use org IdP? must not leave tenant?) before exploration?
+6. **AI-for-investigation brief:** any constraint (must be offline? must use org IdP? must not leave tenant?) before exploration?
 7. **Signing:** when for image + future plugins?
 8. **Fleet size:** tens vs hundreds?
 
@@ -193,8 +195,12 @@ No ISO blobs in git.
 | Substrate | **Under comparison; not locked** — see [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md) |
 | Headlines | Strong **SSO** + strong **MDM support** + frozen core + locked auto-updates + curated apps |
 | Marketplace | Controlled, first-party; concept until ready |
-| AI | Distinct capability **research**; no AI-wash; no ship yet |
+| AI-for-investigation | Distinct capability **research**; no AI-wash; no ship yet |
 | Claims | No live MDM/AI/marketplace until built + CLEAR |
 | Next | Joe SHIP this revise; image pipeline after §8 |
 
 When Rohi answers §8, revise in place and unlock the next SHIP gate.
+
+## 10. Related docs
+
+See [`FEATURE-IDEAS.md`](FEATURE-IDEAS.md) for the ideas-only concept backlog; none of those ideas are shipped or product claims.
