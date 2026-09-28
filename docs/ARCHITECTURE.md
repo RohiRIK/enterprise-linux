@@ -2,8 +2,8 @@
 
 **Status:** concept ADR (not a shipping OS)  
 **Owner:** cto-max-grok  
-**Repo (proposed):** `RohiRIK/enterprise-linux`  
-**Date:** 2026-09-28  
+**Repo:** `RohiRIK/enterprise-linux`  
+**Date:** 2026-09-28 (revised: drop desktop-family coupling; Arch scout; frozen core)
 
 This document is design-only. No ISO, no distro fork, no support contract claims.
 
@@ -16,8 +16,9 @@ Organizations that want Linux on **employee workstations** (not only servers) us
 - A generic desktop distro with weak SSO, weak fleet update story, and no org image pipeline.
 - A locked vendor stack (expensive, slow to customize).
 - Homegrown golden images that rot because nobody owns supply chain, identity, or harden as one system.
+- Rolling / enthusiast desktops that move under the user’s feet — fine for a daily driver, wrong for an org fleet.
 
-**Enterprise Linux (working name)** is a *workstation-oriented* Linux distribution *line* aimed at that gap: one opinionated path from **CI → signed image → identity join → hardened defaults → controlled updates**, so an org can run Linux laptops/desktops without inventing the platform each time.
+**Enterprise Linux (working name)** is a *workstation-oriented* Linux line aimed at that gap: a **frozen core** (pinned base, controlled updates, reproducible images) plus one opinionated path from **CI → image (signed when keys exist) → identity join → hardened defaults → controlled updates**.
 
 Primary user: IT / security / platform owners who already live in Microsoft 365 / Entra (or classic AD) and want Linux next to Windows, not instead of an identity plane.
 
@@ -28,87 +29,109 @@ Primary user: IT / security / platform owners who already live in Microsoft 365 
 - **Not** rewriting the kernel or inventing a new userspace from scratch.
 - **Not** competing with Red Hat (or Canonical) support contracts on day 1.
 - **Not** a cloud server OS product (servers may drink from the same image later; workstation is the wedge).
-- **Not** shipping an Omarchy fork as the org base (Omarchy stays a personal / power-user desktop family; see base options).
+- **Not** a rolling desktop experiment or a personal daily-driver distro product.
 - **Not** marketing fluff, App Store narratives, or “AI OS” claims.
 - **Not** promising FedRAMP / CIS certification on day 1 (we can *track* baselines; we do not claim certified).
 - **Not** building a full MDM competitor before we have one image that boots, joins, and updates.
 
 ---
 
-## 3. Base options
+## 3. Design thesis: frozen core
 
-| Option | What it is | Pros | Cons |
-|---|---|---|---|
-| **A. Ubuntu 24.04 LTS** | Derive images via autoinstall / cloud-init; keep Ubuntu packages + HWE as needed | Best laptop hardware story; huge package index; familiar autoinstall + cloud-init; easy GitHub Actions builders; Entra/AD paths exist (sssd, Ubuntu auth story, third-party) | Not RHEL-compatible; some regulated shops demand RHEL ABI |
-| **B. Rocky (RHEL-compatible)** | Rocky 9/10 as base; kickstart / image builder | SELinux default culture; RHEL muscle memory; better fit for “must look like RHEL” orgs | Laptop/GPU pain higher; slower desktop polish; smaller “just works” laptop path |
-| **C. Omarchy-family desktop** | Treat Omarchy (or a Quattro profile) as the org desktop | Continuity with Rohi’s public Omarchy plugins; great developer UX | Niche; not an SSO/fleet/compliance base; wrong wedge for *enterprise org* workstations |
+**Frozen core** means:
 
-### Recommendation
+- One **pinned** base release (not a rolling tip).
+- Package and config changes enter through **this repo + CI**, not through “user ran pacman -Syu on Monday.”
+- Security updates are allowed on a controlled channel; **major** upgrades are an explicit release train.
+- The golden image is reproducible: same inputs → same build id.
 
-**Day-1 base: Ubuntu 24.04 LTS (option A).**
-
-Why: the product is an *org workstation* line. Hardware breadth, autoinstall, and identity glue matter more than RHEL ABI for the first buyers we can actually serve. Rocky becomes a **second track** only if Rohi names RHEL-compatible shops as a hard requirement.
-
-**Omarchy:** keep as an optional **developer workstation profile** later (apps, bar plugins, defaults) layered *on* the org image — not the foundation.
+This is the opposite of a hobbyist rolling desktop. Org workstations need predictability more than newest packages.
 
 ---
 
-## 4. Day-1 pillars
+## 4. Base options
 
-### 4.1 Identity (SSO)
+| Option | What it is | Pros for org workstations | Cons |
+|---|---|---|---|
+| **A. Vanilla Ubuntu 24.04 LTS** | Derive images via autoinstall / cloud-init; Ubuntu archive + pins | Best laptop hardware story; LTS freeze matches frozen-core; huge package index; autoinstall + cloud-init; easy Actions builders; Entra/AD paths exist (sssd / Ubuntu auth / third-party) | Not RHEL-compatible; some regulated shops demand RHEL ABI |
+| **B. Rocky (RHEL-compatible)** | Rocky 9/10; kickstart / image builder | SELinux culture; RHEL muscle memory | Laptop/GPU pain higher; slower “just works” laptop path |
+| **C. Arch (scout)** | Arch or an Arch-based frozen snapshot (e.g. dated mirror + package list lock) | Excellent packaging; easy to reason about a *declared* package set; good if the hard criterion is “minimal base we fully pin ourselves” | Default Arch is **rolling** — fights frozen-core unless we invent and maintain our own freeze/mirror discipline; weaker out-of-box org SSO / laptop fleet story; higher support load for IT |
 
-- **Primary bet:** Entra ID join / SSO for org users (aligns with Argus / M365 world).
+### Arch scout (brief)
+
+Arch only wins day 1 if Rohi has a **hard** criterion that Ubuntu fails, for example:
+
+- Must own every package pin without an LTS vendor train, **and**
+- Will fund a private freeze mirror + update train as a first-class product surface.
+
+Otherwise Arch’s rolling default is the wrong shape for org workstations. A home-grown Arch freeze is real engineering (mirrors, rebuild, security backport policy) — it is not free just because `pacman` is nice.
+
+**Rocky** stays a later track if RHEL-compatible shops appear — unchanged from prior ADR.
+
+### Recommendation
+
+**Day-1 base: vanilla Ubuntu 24.04 LTS (option A).**
+
+Stay on Ubuntu unless Arch (or Rocky) wins on an explicit hard criterion from Rohi. Do not couple this product to any personal desktop project; this repo stands alone.
+
+---
+
+## 5. Day-1 pillars
+
+### 5.1 Identity (SSO)
+
+- **Primary bet:** Entra ID join / SSO for org users (aligns with M365-heavy orgs).
 - **Secondary:** classic AD via sssd documented, not necessarily automated in MVP.
 - **Rule:** a workstation is not “done” until a standard user can unlock/login with org identity and get a home that is not a local-only orphan.
 - **Non-goal:** inventing our own IdP.
 
-### 4.2 Harden
+### 5.2 Harden
 
 - Disk encryption on by default for laptop profiles (TPM unlock where available; recovery key escrow story documented even if escrow automation is later).
 - Firewall on; SSH off by default on laptop images (on only for break-glass profile).
-- Unattended security updates for the OS package set; no silent major-release upgrades.
+- Unattended **security** updates for the OS package set; no silent major-release upgrades.
 - Start from a public baseline (e.g. Ubuntu Security Guide / CIS-oriented controls) as a *checklist we implement*, not a certification claim.
 - Local admin: break-glass account pattern; day-to-day user is standard.
 
-### 4.3 Image / supply (CI → image)
+### 5.3 Image / supply (CI → image)
 
 - **Source of truth:** this GitHub repo (autoinstall, cloud-init, package seed, harden scripts, version pins).
-- **Pipeline:** GitHub Actions builds a reproducible image artifact (ISO and/or raw/qcow for VM test) on tag; checksums published; signing when Rohi supplies signing keys (unsigned is OK for private early; public needs a signature story before “trust us”).
+- **Pipeline:** GitHub Actions builds a reproducible image artifact (ISO and/or raw/qcow for VM test) on tag; checksums published; **signing when keys exist** (unsigned is OK early; public “trust us” needs a signature story).
 - **No** hand-rolled ISOs on a laptop as the release process.
-- Installers / first-boot must follow Omarchy-family rule spirit: only touch files/links *this* project created (marker + checksum). Do not clobber user desktop entries or foreign configs.
+- First-boot / install helpers may only create or update files and links **this** project owns (marker + checksum). Do not clobber foreign desktop entries or unrelated configs.
 
-### 4.4 Update story
+### 5.4 Update story (frozen core in practice)
 
 - Security updates: unattended-upgrades (or equivalent) with a documented reboot window.
-- App/desktop layer: prefer distro packages + a small curated flatpak allowlist if needed; avoid “curl | bash” as the update channel.
+- App/desktop layer: prefer distro packages + a small curated flatpak allowlist if needed; avoid `curl | bash` as the update channel.
 - Major version (24.04 → next LTS): explicit release train, not automatic.
-- Inventory signal: every image reports version / build id so fleet drift is visible (osquery or a tiny inventory agent — decide in MVP).
+- Inventory signal: every image reports version / build id so fleet drift is visible (osquery or a tiny fact file — decide in MVP).
 
 ---
 
-## 5. MVP boundary (about 4–8 weeks of focused work)
+## 6. MVP boundary (about 4–8 weeks of focused work)
 
 **In**
 
-1. Public (or private) repo skeleton + this ADR + short README (what / why / non-goals).
-2. One **laptop-oriented** Ubuntu 24.04 autoinstall seed (packages + harden hooks).
-3. CI that builds *something bootable in a VM* on tag (even if ugly) with checksums.
+1. Public repo + this ADR + short README (what / why / non-goals).
+2. One **laptop-oriented** Ubuntu 24.04 autoinstall seed (packages + harden hooks + pins).
+3. CI that builds *something bootable in a VM* on tag (even if ugly) with checksums; signing when keys exist.
 4. Identity path documented + scripted for **one** of: Entra join *or* AD/sssd (pick with Rohi — default proposal Entra).
 5. Update path: security unattended-upgrades on; major upgrade off.
-6. Inventory: build id in `/etc/os-release`-style custom fields or a small fact file; optional osquery later.
+6. Inventory: build id in custom os-release fields or a small fact file.
 7. Docs: install in VM, join identity, verify updates — three pages max.
 
 **Out (explicit)**
 
 - Custom kernel, Secure Boot signing infrastructure beyond “document what we need”.
 - Full MDM, compliance dashboards, device attestation product.
-- Rocky track, Omarchy profile pack, app store.
+- Rocky track, Arch freeze mirror product, personal-desktop flavors.
 - Guarantees about battery life, GPU, or dock support matrices.
 - Support SLAs.
 
 ---
 
-## 6. Suggested layout (repo skeleton)
+## 7. Suggested layout (repo skeleton)
 
 ```
 README.md                 # short: what / why / non-goals
@@ -117,36 +140,39 @@ docs/ARCHITECTURE.md      # this file
 docs/IDENTITY.md          # stub until path chosen
 docs/HARDENING.md         # stub checklist
 docs/IMAGE-PIPELINE.md    # stub CI → artifact
-image/                    # autoinstall / cloud-init seeds (placeholders OK)
-scripts/                  # harden / first-boot helpers (placeholders OK)
-.github/workflows/        # build on tag (can land empty then fill)
+image/                    # autoinstall / cloud-init seeds
+scripts/                  # harden / first-boot helpers
+.github/workflows/        # build on tag (when workflow scope exists)
 ```
 
 No ISO blobs in git. Artifacts live on Releases.
 
 ---
 
-## 7. Open questions for Rohi
+## 8. Open questions for Rohi
 
-1. **Visibility:** public MIT from day 1, or private until first VM image boots?
-2. **Identity wedge:** Entra-first (recommended), AD-first, or both in MVP?
-3. **Name lock:** keep `enterprise-linux`, or prefer a short product name (still English, still boring)?
-4. **RHEL-compatible:** is Rocky a hard day-1 requirement for a named customer, or later track?
-5. **Omarchy:** confirm “profile later, not base” — or do you want a developer flavor in MVP?
-6. **Signing:** do we have (or will we create) a release-signing key before public image claims?
-7. **Fleet assumption:** tens of machines (script + docs OK) or hundreds (needs inventory + update policy sooner)?
+1. **Identity wedge:** Entra-first (recommended), AD-first, or both in MVP?
+2. **Name lock:** keep `enterprise-linux`, or prefer a short product name (still English, still boring)?
+3. **RHEL-compatible:** is Rocky a hard day-1 requirement for a named customer, or later track?
+4. **Arch:** any hard criterion that would force an Arch frozen-core track instead of Ubuntu LTS? (Default: no.)
+5. **Signing:** do we have (or will we create) a release-signing key before public image claims?
+6. **Fleet assumption:** tens of machines (script + docs OK) or hundreds (needs inventory + update policy sooner)?
+
+Visibility is already **public MIT** on `RohiRIK/enterprise-linux` unless Rohi flips it.
 
 ---
 
-## 8. Decision summary
+## 9. Decision summary
 
 | Topic | Decision |
 |---|---|
-| Product wedge | Org **workstations**, not servers |
-| Base | **Ubuntu 24.04 LTS** |
-| Rocky / Omarchy | Later tracks / profiles — not day-1 base |
-| Pillars | SSO, harden, CI→image, controlled updates |
-| License | MIT (unless Rohi flips) |
-| Now | Memo + repo skeleton only |
+| Product wedge | Org **workstations**, frozen core — not rolling desktop |
+| Base | **Vanilla Ubuntu 24.04 LTS** |
+| Arch | Scouted; **do not adopt** unless a hard criterion wins |
+| Rocky | Later track if RHEL shops appear |
+| Personal desktop projects | **Decoupled** — out of scope for this product |
+| Pillars | SSO, harden, CI→image (sign when keys exist), controlled updates |
+| License | MIT |
+| Next | Image pipeline after Rohi answers §8 |
 
-When Rohi answers §7, revise this ADR in place and unlock joe’s image-pipeline SHIP.
+When Rohi answers §8, revise this ADR in place and unlock the image-pipeline SHIP.
