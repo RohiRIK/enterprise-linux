@@ -1,0 +1,8 @@
+*.iso
+*.img
+*.qcow2
+*.raw
+*.raw.xz
+.env
+*.pem
+*.key
