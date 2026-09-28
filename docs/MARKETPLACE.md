@@ -2,7 +2,7 @@
 
 **Status: concept / stub only. Not live. Do not claim a working store.**
 
-See `docs/ARCHITECTURE.md` §5.4 and §8.
+See `docs/ARCHITECTURE.md` §5.6 and §8.
 
 ## What it is (when built)
 
@@ -20,4 +20,4 @@ Signing keys, update/revoke story, and security review of the supply chain.
 
 ## Repo placeholder
 
-Empty `catalog/` directory reserved for later first-party plugin metadata. No install UX that pretends plugins are available today.
+Empty `catalog/` — no install UX that pretends plugins are available today.

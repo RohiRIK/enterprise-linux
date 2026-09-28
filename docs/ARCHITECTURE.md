@@ -3,9 +3,9 @@
 **Status:** concept ADR (not a shipping OS)  
 **Owner:** cto-max-grok  
 **Repo:** `RohiRIK/enterprise-linux`  
-**Date:** 2026-09-28 (revised: product thesis — curated experience on Ubuntu substrate)
+**Date:** 2026-09-28 (revised: MDM headline + AI research + locked auto-updates)
 
-This document is design-only. No ISO, no distro fork, no support contract claims. No live marketplace yet.
+This document is design-only. No ISO, no distro fork, no support contract claims. No live MDM connector, marketplace, or AI feature shipping yet.
 
 ---
 
@@ -13,31 +13,36 @@ This document is design-only. No ISO, no distro fork, no support contract claims
 
 Organizations that want Linux on **employee workstations** usually get one of:
 
-- A vanilla desktop distro with weak SSO, weak fleet updates, and no org image pipeline.
+- Vanilla Ubuntu (or similar) that is **not MDM-ready** the way Windows/macOS are — weak enroll, weak policy, weak inventory.
 - A locked vendor stack (expensive, slow to customize).
-- Homegrown golden images that rot because nobody owns supply chain, identity, apps, and harden as one system.
-- Rolling / enthusiast desktops that move under the fleet’s feet.
+- Homegrown golden images that rot: no single owner for identity, harden, apps, updates, and device management.
+- DIY boxes where users install whatever and “security updates” means hope.
 
-“Install Ubuntu and hope” is not a product. IT needs a **curated workstation experience**: identity that works on day one, a frozen OS core, an org-approved app set, and (later) a controlled channel for plugins *we* prepare — not another untitled remix.
+Stock Ubuntu as a blank canvas is not enough for org fleets. IT needs a **locked, pre-hardened, curated workstation product**: strong SSO, strong MDM support, frozen core, curated apps, controlled auto-updates, and (later) a first-party plugin channel — with room to explore a **distinct** AI capability that does not exist yet (research only until it earns a ship).
 
-**Enterprise Linux (working name)** is that product line. **Ubuntu 24.04 LTS is the substrate**, not the brand story.
+**Enterprise Linux (working name)** is that product. **Ubuntu 24.04 LTS is the substrate**, not the brand story.
 
-Primary user: IT / security / platform owners in Microsoft 365 / Entra (or classic AD) shops who want Linux next to Windows.
+Primary user: IT / security / platform owners in M365 / Entra (or AD) shops who want Linux next to Windows under the same control plane expectations.
 
 ---
 
 ## 2. Product thesis
 
-Four equal pillars (none optional in the vision; MVP ships a subset — see §7):
+Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims a live connector or AI product today.
 
 | Pillar | Meaning |
 |---|---|
-| **Frozen core** | Pinned Ubuntu LTS base; changes enter via this repo + CI; security updates controlled; major upgrades are an explicit train — not rolling desktop experiments. |
-| **Strong SSO** | Headline, not a footnote. Org login (Entra-first) is how a machine becomes “done.” |
-| **Curated apps** | Pre-defined, org-approved application set — baked into the image and/or gated by policy. Not “user install whatever from the internet.” |
-| **Controlled plugin marketplace** | *Optional* channel of plugins **we prepare and sign/publish**. Not a random third-party free-for-all. Concept until supply chain + signing exist. |
+| **Frozen core** | Pinned Ubuntu LTS; changes via this repo + CI; major upgrades = release train. |
+| **Strong SSO** | Org login (Entra-first) is how a machine becomes “done.” |
+| **Strong MDM support** | **Headline.** Product is designed MDM-ready for Intune / Jamf-class (or equivalent Linux management) — enroll, policy, inventory, remote actions as the target story. Specifics TBD; not “install Ubuntu and figure out MDM yourself.” |
+| **Curated apps** | Org-approved app set baked and/or gated. |
+| **Locked security + automatic updates** | Pre-hardened image; controlled **automatic** security/system update path; not a DIY unpatched box. |
+| **Controlled plugin marketplace** | Optional channel of plugins **we** prepare. Concept until signing + supply chain exist. |
+| **AI direction (research)** | Explore a *distinct* AI capability that does not exist yet. Open research track — **not** AI-washing, not a ship claim. |
 
-**Non-positioning:** we are **not** competing as “another Ubuntu remix” brand-only. The substrate is Ubuntu; the product is the curated stack above it.
+**Non-positioning:** not “another Ubuntu remix” brand-only. Substrate = Ubuntu; product = the locked curated stack + MDM-ready control plane above it.
+
+**Locked ahead of time:** the default image is ready and constrained before it reaches the user — apps, harden, update policy, identity hooks, MDM hooks — not a blank DIY Ubuntu install.
 
 ---
 
@@ -46,11 +51,12 @@ Four equal pillars (none optional in the vision; MVP ships a subset — see §7)
 - **Not** rewriting the kernel or inventing a new userspace from scratch.
 - **Not** competing with Red Hat / Canonical support contracts on day 1.
 - **Not** a cloud server OS product (workstation is the wedge).
-- **Not** a rolling desktop or a personal daily-driver distro product.
-- **Not** an open third-party app store / sideload free-for-all.
-- **Not** claiming a live marketplace, signed plugin trust, or FedRAMP/CIS certification before those exist.
-- **Not** marketing fluff or “AI OS” claims.
-- **Not** full MDM before one image boots, joins SSO, and updates.
+- **Not** a rolling desktop or personal daily-driver product.
+- **Not** an open third-party app/plugin free-for-all.
+- **Not** claiming a **live** MDM integration, live marketplace, signed plugin trust, or shipping AI feature until each exists and is Sam-clear.
+- **Not** AI-washing (“AI OS”) or bolting a chatbot onto the login screen and calling it differentiation.
+- **Not** promising FedRAMP / CIS **certification** on day 1 (baselines as checklists OK).
+- **Not** building a full MDM *vendor* that replaces Intune/Jamf — we **integrate / are ready for** org MDM, not rebrand as one on day 1.
 
 ---
 
@@ -59,14 +65,10 @@ Four equal pillars (none optional in the vision; MVP ships a subset — see §7)
 | Option | Role | Verdict |
 |---|---|---|
 | **A. Vanilla Ubuntu 24.04 LTS** | Substrate for frozen core + autoinstall / cloud-init | **Day-1 choice** |
-| **B. Rocky (RHEL-compatible)** | Later track if a named customer requires RHEL ABI | Not day 1 |
-| **C. Arch (scout)** | Only if Rohi names a hard criterion that forces a self-funded freeze mirror | **Do not adopt** by default — rolling fights frozen core |
+| **B. Rocky (RHEL-compatible)** | Later track if RHEL ABI required | Not day 1 |
+| **C. Arch (scout)** | Only with hard criterion + funded freeze mirror | **Do not adopt** by default |
 
-### Recommendation
-
-**Substrate: Ubuntu 24.04 LTS.** Product value lives in SSO + curated apps + (later) controlled marketplace + image pipeline — not in forking Ubuntu for its own sake.
-
-Arch scout (unchanged): Arch wins only with an explicit hard criterion and funding for freeze/mirror/security backport as a product surface. Default remains Ubuntu.
+**Recommendation:** Ubuntu 24.04 LTS substrate. Product value = SSO + MDM-ready design + curated apps + locked updates + (later) marketplace + AI research — not forking Ubuntu for its own sake.
 
 ---
 
@@ -74,46 +76,50 @@ Arch scout (unchanged): Arch wins only with an explicit hard criterion and fundi
 
 ### 5.1 Frozen core
 
-- One pinned LTS base; package/config changes via this repo + CI.
-- Security updates on a controlled channel; major upgrades = release train.
-- Reproducible golden image: same inputs → same build id.
-- Opposite of a hobbyist rolling desktop.
+- Pinned LTS; repo + CI as source of truth; reproducible build ids.
+- Opposite of rolling enthusiast desktops.
 
 ### 5.2 Strong SSO (headline)
 
-- **Primary:** Entra ID join / SSO.
-- **Secondary:** classic AD via sssd (documented; automate only if Rohi picks it for MVP).
-- Done = standard user unlocks with org identity; home is not a local-only orphan.
-- Non-goal: inventing our own IdP.
+- Entra-first; AD/sssd secondary.
+- Done = org identity unlock + real home, not local-only orphan.
+- Non-goal: own IdP.
 
-### 5.3 Curated apps
+### 5.3 Strong MDM support (headline)
 
-- A **declared** org-approved app set (seed list in-repo): browsers, collab, security agents, etc. as Rohi/IT name them.
-- Delivery: baked into the image for the default profile, and/or installable only from our gated set.
-- Out of MVP: unlimited user choice from upstream stores without policy.
-- Flatpak allowlist is acceptable *only* as a curated list we pin — not “Flathub unbounded.”
+- **Target story:** enroll into org MDM (Intune-class and/or Jamf-class Linux management — exact vendors TBD with Rohi), apply policy, inventory, and support remote actions the platform allows.
+- **Day-1 design obligations:** image and first-boot leave clean hooks (agent slots, device identity, compliance facts, update/reboot policy surfaces) so MDM is not a retrofit science project.
+- **Not yet claimed:** a shipping Intune/Jamf connector, portal, or “works with Intune” badge — those need a named design + Sam CLEAR before README claims.
+- Open research: which Linux MDM paths are real in 2026 (Intune Linux, fleet, Landscape, etc.) — pick in a follow-on ADR after Rohi names must-have vendors.
 
-### 5.4 Controlled plugin marketplace (concept)
+### 5.4 Curated apps
 
-- **What it is:** a catalog of plugins / extensions **we** build or vendor, reviewed, and published through *our* channel.
-- **What it is not:** arbitrary third-party uploads, unsigned blobs, or “npm of the desktop.”
-- **Day 1:** document the shape + empty catalog / placeholder API; **do not** claim a live store.
-- **Before public “install plugin”:** signing keys, update/revoke story, and Sam-clear supply chain.
-- Optional for a given org: marketplace can be disabled; curated apps + frozen core + SSO still stand.
+- Declared org-approved seed in-repo; baked and/or gated.
+- Flatpak only as a **pinned allowlist**, not unbounded Flathub.
 
-### 5.5 Image / supply (CI → image)
+### 5.5 Locked security + automatic system updates
 
-- Source of truth: this repo (autoinstall, cloud-init, app seed, harden, pins).
-- CI builds bootable artifact on tag; checksums always; **signing when keys exist**.
-- No hand-rolled laptop ISOs as the release process.
-- First-boot helpers only touch files/links this project owns (marker + checksum).
-
-### 5.6 Harden + updates
-
-- Laptop: disk encryption default; firewall on; SSH off by default (break-glass profile only).
-- Unattended **security** updates; no silent major upgrades.
+- Pre-hardened laptop defaults: encryption, firewall on, SSH off by default, break-glass admin pattern.
+- **Automatic** security/system updates on a controlled channel with documented reboot windows.
+- No silent major-release upgrades; no “user will remember to patch.”
 - Baseline checklists (USG / CIS-oriented) as implementation guides — not certification claims.
-- Inventory: build id visible for fleet drift.
+
+### 5.6 Controlled plugin marketplace (concept)
+
+- First-party / we-prepare only; no third-party free-for-all.
+- Stub catalog until signing + revoke story exist.
+- Orgs may disable the channel entirely.
+
+### 5.7 AI direction (research only)
+
+- Goal: find **one distinct** capability that does not exist yet (or is not productized for org Linux workstations) — e.g. fleet-aware assist that respects MDM/SSO boundaries, offline-safe policy help, or something sharper once researched.
+- **Process:** short research notes → Rohi pick → design ADR → only then SHIP.
+- **Forbidden:** shipping a generic chatbot skin; marketing “AI OS”; implying AI is live in this repo today.
+
+### 5.8 Image / supply (CI → image)
+
+- CI → bootable artifact on tag; checksums always; **signing when keys exist**.
+- First-boot only touches project-owned paths (marker + checksum).
 
 ---
 
@@ -121,21 +127,20 @@ Arch scout (unchanged): Arch wins only with an explicit hard criterion and fundi
 
 **In**
 
-1. Repo + this ADR + short README (product thesis / non-goals — not “Ubuntu remix”).
-2. One laptop-oriented Ubuntu 24.04 autoinstall seed with **pins + curated app seed** (even if the seed is small).
-3. CI → VM-bootable artifact + checksums (signing when keys exist).
-4. **Strong SSO path** scripted for one of Entra or AD (default proposal: Entra).
-5. Security unattended-upgrades on; major upgrade off; build id fact.
-6. Marketplace: **docs + stub only** (catalog empty; no install UX that pretends plugins are live).
-7. Short verify docs: VM install → SSO → updates → app seed present.
+1. Repo + ADR + README reflecting product thesis (not “just Ubuntu”).
+2. Ubuntu 24.04 autoinstall seed: pins + harden + curated app seed + update policy on.
+3. CI → VM-bootable artifact + checksums.
+4. Strong SSO path for one IdP (default proposal: Entra).
+5. **MDM-ready hooks** documented + stubbed (agent slot, facts, enroll doc) — **not** a live vendor integration unless Rohi greenlights a named MVP connector.
+6. Marketplace + AI: **docs / research stubs only**.
+7. Verify docs: VM install → SSO → updates → app seed → MDM hook checklist.
 
 **Out**
 
-- Live plugin marketplace, third-party submissions, public trust claims without keys.
+- Live Intune/Jamf connector, live marketplace, shipping AI feature.
 - Custom kernel / full Secure Boot PKI beyond documenting needs.
-- Full MDM / compliance product.
-- Rocky or Arch tracks.
-- Support SLAs; hardware guarantee matrices.
+- Full in-house MDM product replacing vendors.
+- Rocky/Arch tracks; support SLAs; hardware guarantee matrices.
 
 ---
 
@@ -144,31 +149,34 @@ Arch scout (unchanged): Arch wins only with an explicit hard criterion and fundi
 ```
 README.md
 LICENSE
-docs/ARCHITECTURE.md      # this file
+docs/ARCHITECTURE.md
 docs/IDENTITY.md
 docs/HARDENING.md
 docs/IMAGE-PIPELINE.md
-docs/CURATED-APPS.md      # seed list + policy (stub OK)
-docs/MARKETPLACE.md       # concept + non-goals for third-party (stub OK)
+docs/CURATED-APPS.md
+docs/MARKETPLACE.md          # concept / not live
+docs/MDM.md                  # target story + hooks; no live claim
+docs/AI-RESEARCH.md          # open questions; no ship claim
 image/
 scripts/
-catalog/                  # placeholder for later controlled plugins (empty)
-.github/workflows/        # when workflow scope exists
+catalog/                     # empty
+.github/workflows/
 ```
 
-No ISO blobs in git. Artifacts on Releases.
+No ISO blobs in git.
 
 ---
 
 ## 8. Open questions for Rohi
 
 1. **Identity:** Entra-first (recommended), AD-first, or both in MVP?
-2. **Name lock:** keep `enterprise-linux` or a short product name?
-3. **Curated app seed v0:** which apps are must-have on the first image?
-4. **Marketplace timing:** stub-only through MVP (recommended), or a single first-party plugin as proof?
-5. **Rocky / Arch:** any hard customer criterion, or Ubuntu substrate only for now?
-6. **Signing:** when do release + plugin signing keys get created?
-7. **Fleet size:** tens (docs + scripts) vs hundreds (inventory/update policy sooner)?
+2. **MDM must-have vendor(s):** Intune Linux, Jamf, other, or “hooks only” in MVP?
+3. **Name lock:** `enterprise-linux` or short product name?
+4. **Curated app seed v0:** must-have apps on image one?
+5. **Marketplace:** stub through MVP (recommended) vs one first-party plugin proof?
+6. **AI research brief:** any constraint (must be offline? must use org IdP? must not leave tenant?) before exploration?
+7. **Signing:** when for image + future plugins?
+8. **Fleet size:** tens vs hundreds?
 
 ---
 
@@ -176,13 +184,12 @@ No ISO blobs in git. Artifacts on Releases.
 
 | Topic | Decision |
 |---|---|
-| Product | Curated org workstation — **not** “just Ubuntu” |
+| Product | Locked curated org workstation — **not** DIY Ubuntu |
 | Substrate | **Ubuntu 24.04 LTS** |
-| Pillars | Frozen core + **strong SSO** + curated apps + controlled marketplace (concept) |
-| Marketplace | First-party / we-prepare only; no third-party free-for-all; not live yet |
-| Arch / Rocky | Out unless hard criterion |
-| Personal desktop projects | Decoupled — out of scope |
-| License | MIT |
-| Next | Docs SHIP this revise; image pipeline after §8 answers |
+| Headlines | Strong **SSO** + strong **MDM support** + frozen core + locked auto-updates + curated apps |
+| Marketplace | Controlled, first-party; concept until ready |
+| AI | Distinct capability **research**; no AI-wash; no ship yet |
+| Claims | No live MDM/AI/marketplace until built + CLEAR |
+| Next | Joe SHIP this revise; image pipeline after §8 |
 
-When Rohi answers §8, revise in place and unlock image-pipeline + app-seed SHIP.
+When Rohi answers §8, revise in place and unlock the next SHIP gate.

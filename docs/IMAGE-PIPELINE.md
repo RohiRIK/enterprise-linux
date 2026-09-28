@@ -2,7 +2,7 @@
 
 Stub. CI → reproducible artifact on tag; checksums on Releases; signing when keys exist.
 
-See `docs/ARCHITECTURE.md` §5.5. No ISO blobs in git.
+See `docs/ARCHITECTURE.md` §5.8. No ISO blobs in git.
 
 ## CI layout (later)
 
