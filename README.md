@@ -1,37 +1,48 @@
 # enterprise-linux
 
-Concept ADR and repo skeleton for an **org workstation** Linux line under [RohiRIK](https://github.com/RohiRIK).
+Concept ADR and repo skeleton for a **curated org workstation** Linux product under [RohiRIK](https://github.com/RohiRIK).
 
 ## What
 
-A design home for a workstation-oriented Linux line with a **frozen core** (pinned base, controlled updates, reproducible images): one path from **CI → image (signing when keys exist) → identity join → hardened defaults → controlled updates**. Not a shipping OS yet.
+Not “just Ubuntu.” **Ubuntu 24.04 LTS is the substrate**; the product is the stack on top:
 
-Primary audience: IT / security / platform owners who already run Microsoft 365 / Entra (or classic AD) and want Linux next to Windows.
+- **Frozen core** — pinned base, controlled updates, reproducible images
+- **Strong SSO** — Entra-first org login as a headline pillar
+- **Curated apps** — org-approved app set, baked and/or gated
+- **Controlled plugin marketplace** — plugins *we* prepare (concept/stub only; not live)
+
+Path: **CI → image (signing when keys exist) → SSO join → harden → curated apps → controlled updates**. Not a shipping OS yet.
+
+Primary audience: IT / security / platform owners in Microsoft 365 / Entra (or classic AD) shops who want Linux next to Windows.
 
 ## Why
 
-Generic desktop distros leave SSO, fleet updates, and org image supply half-solved. Vendor stacks are slow to customize. Homegrown golden images rot. Rolling enthusiast desktops move under the fleet’s feet. This repo is where we write the architecture and, later, the autoinstall seed and CI that build a real image.
+Vanilla distros leave SSO, fleet updates, and org apps half-solved. Vendor stacks are slow to customize. Homegrown images rot. Rolling desktops move under the fleet. This repo holds the architecture — and later the image seed and CI — for a curated experience, not another untitled remix.
 
 ## Non-goals
 
 - No kernel rewrite; no new userspace from scratch.
 - No day-1 competition with RHEL/Canonical support contracts.
-- No cloud-server product wedge (workstation first).
-- No rolling desktop experiment; no personal daily-driver distro product.
-- No ISO or distro fork in this repo yet — design + skeleton only.
-- No FedRAMP/CIS certification claims; no full MDM product before one image boots, joins, and updates.
+- No “Ubuntu remix” brand-only story (substrate ≠ product).
+- No open third-party app store / sideload free-for-all.
+- No live marketplace, signed-plugin trust, or FedRAMP/CIS claims before those exist.
+- No rolling desktop or personal daily-driver distro product.
+- No ISO in this repo yet — design + skeleton only.
+- No full MDM before one image boots, joins SSO, and updates.
 - No marketing fluff or “AI OS” claims.
 
 ## Status
 
-**Concept only.** Day-1 base recommendation is **vanilla Ubuntu 24.04 LTS** (Arch scouted; stay Ubuntu unless a hard criterion wins — see architecture). Open questions for Rohi are in the ADR.
+**Concept only.** Substrate: Ubuntu 24.04 LTS. Marketplace and catalog are stubs. Open questions for Rohi are in the ADR.
 
 ## Docs
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — ADR (problem, frozen core, base options, pillars, MVP, open questions)
-- [`docs/IDENTITY.md`](docs/IDENTITY.md) — stub
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — ADR
+- [`docs/IDENTITY.md`](docs/IDENTITY.md) — stub (SSO)
 - [`docs/HARDENING.md`](docs/HARDENING.md) — stub
 - [`docs/IMAGE-PIPELINE.md`](docs/IMAGE-PIPELINE.md) — stub
+- [`docs/CURATED-APPS.md`](docs/CURATED-APPS.md) — stub seed / policy
+- [`docs/MARKETPLACE.md`](docs/MARKETPLACE.md) — concept stub (not live)
 
 ## License
 

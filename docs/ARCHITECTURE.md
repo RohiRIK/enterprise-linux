@@ -3,162 +3,172 @@
 **Status:** concept ADR (not a shipping OS)  
 **Owner:** cto-max-grok  
 **Repo:** `RohiRIK/enterprise-linux`  
-**Date:** 2026-09-28 (revised: drop desktop-family coupling; Arch scout; frozen core)
+**Date:** 2026-09-28 (revised: product thesis — curated experience on Ubuntu substrate)
 
-This document is design-only. No ISO, no distro fork, no support contract claims.
+This document is design-only. No ISO, no distro fork, no support contract claims. No live marketplace yet.
 
 ---
 
 ## 1. Problem
 
-Organizations that want Linux on **employee workstations** (not only servers) usually get one of:
+Organizations that want Linux on **employee workstations** usually get one of:
 
-- A generic desktop distro with weak SSO, weak fleet update story, and no org image pipeline.
+- A vanilla desktop distro with weak SSO, weak fleet updates, and no org image pipeline.
 - A locked vendor stack (expensive, slow to customize).
-- Homegrown golden images that rot because nobody owns supply chain, identity, or harden as one system.
-- Rolling / enthusiast desktops that move under the user’s feet — fine for a daily driver, wrong for an org fleet.
+- Homegrown golden images that rot because nobody owns supply chain, identity, apps, and harden as one system.
+- Rolling / enthusiast desktops that move under the fleet’s feet.
 
-**Enterprise Linux (working name)** is a *workstation-oriented* Linux line aimed at that gap: a **frozen core** (pinned base, controlled updates, reproducible images) plus one opinionated path from **CI → image (signed when keys exist) → identity join → hardened defaults → controlled updates**.
+“Install Ubuntu and hope” is not a product. IT needs a **curated workstation experience**: identity that works on day one, a frozen OS core, an org-approved app set, and (later) a controlled channel for plugins *we* prepare — not another untitled remix.
 
-Primary user: IT / security / platform owners who already live in Microsoft 365 / Entra (or classic AD) and want Linux next to Windows, not instead of an identity plane.
+**Enterprise Linux (working name)** is that product line. **Ubuntu 24.04 LTS is the substrate**, not the brand story.
+
+Primary user: IT / security / platform owners in Microsoft 365 / Entra (or classic AD) shops who want Linux next to Windows.
 
 ---
 
-## 2. Non-goals (day 1 and near term)
+## 2. Product thesis
+
+Four equal pillars (none optional in the vision; MVP ships a subset — see §7):
+
+| Pillar | Meaning |
+|---|---|
+| **Frozen core** | Pinned Ubuntu LTS base; changes enter via this repo + CI; security updates controlled; major upgrades are an explicit train — not rolling desktop experiments. |
+| **Strong SSO** | Headline, not a footnote. Org login (Entra-first) is how a machine becomes “done.” |
+| **Curated apps** | Pre-defined, org-approved application set — baked into the image and/or gated by policy. Not “user install whatever from the internet.” |
+| **Controlled plugin marketplace** | *Optional* channel of plugins **we prepare and sign/publish**. Not a random third-party free-for-all. Concept until supply chain + signing exist. |
+
+**Non-positioning:** we are **not** competing as “another Ubuntu remix” brand-only. The substrate is Ubuntu; the product is the curated stack above it.
+
+---
+
+## 3. Non-goals (day 1 and near term)
 
 - **Not** rewriting the kernel or inventing a new userspace from scratch.
-- **Not** competing with Red Hat (or Canonical) support contracts on day 1.
-- **Not** a cloud server OS product (servers may drink from the same image later; workstation is the wedge).
-- **Not** a rolling desktop experiment or a personal daily-driver distro product.
-- **Not** marketing fluff, App Store narratives, or “AI OS” claims.
-- **Not** promising FedRAMP / CIS certification on day 1 (we can *track* baselines; we do not claim certified).
-- **Not** building a full MDM competitor before we have one image that boots, joins, and updates.
+- **Not** competing with Red Hat / Canonical support contracts on day 1.
+- **Not** a cloud server OS product (workstation is the wedge).
+- **Not** a rolling desktop or a personal daily-driver distro product.
+- **Not** an open third-party app store / sideload free-for-all.
+- **Not** claiming a live marketplace, signed plugin trust, or FedRAMP/CIS certification before those exist.
+- **Not** marketing fluff or “AI OS” claims.
+- **Not** full MDM before one image boots, joins SSO, and updates.
 
 ---
 
-## 3. Design thesis: frozen core
+## 4. Substrate: base options
 
-**Frozen core** means:
-
-- One **pinned** base release (not a rolling tip).
-- Package and config changes enter through **this repo + CI**, not through “user ran pacman -Syu on Monday.”
-- Security updates are allowed on a controlled channel; **major** upgrades are an explicit release train.
-- The golden image is reproducible: same inputs → same build id.
-
-This is the opposite of a hobbyist rolling desktop. Org workstations need predictability more than newest packages.
-
----
-
-## 4. Base options
-
-| Option | What it is | Pros for org workstations | Cons |
-|---|---|---|---|
-| **A. Vanilla Ubuntu 24.04 LTS** | Derive images via autoinstall / cloud-init; Ubuntu archive + pins | Best laptop hardware story; LTS freeze matches frozen-core; huge package index; autoinstall + cloud-init; easy Actions builders; Entra/AD paths exist (sssd / Ubuntu auth / third-party) | Not RHEL-compatible; some regulated shops demand RHEL ABI |
-| **B. Rocky (RHEL-compatible)** | Rocky 9/10; kickstart / image builder | SELinux culture; RHEL muscle memory | Laptop/GPU pain higher; slower “just works” laptop path |
-| **C. Arch (scout)** | Arch or an Arch-based frozen snapshot (e.g. dated mirror + package list lock) | Excellent packaging; easy to reason about a *declared* package set; good if the hard criterion is “minimal base we fully pin ourselves” | Default Arch is **rolling** — fights frozen-core unless we invent and maintain our own freeze/mirror discipline; weaker out-of-box org SSO / laptop fleet story; higher support load for IT |
-
-### Arch scout (brief)
-
-Arch only wins day 1 if Rohi has a **hard** criterion that Ubuntu fails, for example:
-
-- Must own every package pin without an LTS vendor train, **and**
-- Will fund a private freeze mirror + update train as a first-class product surface.
-
-Otherwise Arch’s rolling default is the wrong shape for org workstations. A home-grown Arch freeze is real engineering (mirrors, rebuild, security backport policy) — it is not free just because `pacman` is nice.
-
-**Rocky** stays a later track if RHEL-compatible shops appear — unchanged from prior ADR.
+| Option | Role | Verdict |
+|---|---|---|
+| **A. Vanilla Ubuntu 24.04 LTS** | Substrate for frozen core + autoinstall / cloud-init | **Day-1 choice** |
+| **B. Rocky (RHEL-compatible)** | Later track if a named customer requires RHEL ABI | Not day 1 |
+| **C. Arch (scout)** | Only if Rohi names a hard criterion that forces a self-funded freeze mirror | **Do not adopt** by default — rolling fights frozen core |
 
 ### Recommendation
 
-**Day-1 base: vanilla Ubuntu 24.04 LTS (option A).**
+**Substrate: Ubuntu 24.04 LTS.** Product value lives in SSO + curated apps + (later) controlled marketplace + image pipeline — not in forking Ubuntu for its own sake.
 
-Stay on Ubuntu unless Arch (or Rocky) wins on an explicit hard criterion from Rohi. Do not couple this product to any personal desktop project; this repo stands alone.
-
----
-
-## 5. Day-1 pillars
-
-### 5.1 Identity (SSO)
-
-- **Primary bet:** Entra ID join / SSO for org users (aligns with M365-heavy orgs).
-- **Secondary:** classic AD via sssd documented, not necessarily automated in MVP.
-- **Rule:** a workstation is not “done” until a standard user can unlock/login with org identity and get a home that is not a local-only orphan.
-- **Non-goal:** inventing our own IdP.
-
-### 5.2 Harden
-
-- Disk encryption on by default for laptop profiles (TPM unlock where available; recovery key escrow story documented even if escrow automation is later).
-- Firewall on; SSH off by default on laptop images (on only for break-glass profile).
-- Unattended **security** updates for the OS package set; no silent major-release upgrades.
-- Start from a public baseline (e.g. Ubuntu Security Guide / CIS-oriented controls) as a *checklist we implement*, not a certification claim.
-- Local admin: break-glass account pattern; day-to-day user is standard.
-
-### 5.3 Image / supply (CI → image)
-
-- **Source of truth:** this GitHub repo (autoinstall, cloud-init, package seed, harden scripts, version pins).
-- **Pipeline:** GitHub Actions builds a reproducible image artifact (ISO and/or raw/qcow for VM test) on tag; checksums published; **signing when keys exist** (unsigned is OK early; public “trust us” needs a signature story).
-- **No** hand-rolled ISOs on a laptop as the release process.
-- First-boot / install helpers may only create or update files and links **this** project owns (marker + checksum). Do not clobber foreign desktop entries or unrelated configs.
-
-### 5.4 Update story (frozen core in practice)
-
-- Security updates: unattended-upgrades (or equivalent) with a documented reboot window.
-- App/desktop layer: prefer distro packages + a small curated flatpak allowlist if needed; avoid `curl | bash` as the update channel.
-- Major version (24.04 → next LTS): explicit release train, not automatic.
-- Inventory signal: every image reports version / build id so fleet drift is visible (osquery or a tiny fact file — decide in MVP).
+Arch scout (unchanged): Arch wins only with an explicit hard criterion and funding for freeze/mirror/security backport as a product surface. Default remains Ubuntu.
 
 ---
 
-## 6. MVP boundary (about 4–8 weeks of focused work)
+## 5. Pillars in detail
+
+### 5.1 Frozen core
+
+- One pinned LTS base; package/config changes via this repo + CI.
+- Security updates on a controlled channel; major upgrades = release train.
+- Reproducible golden image: same inputs → same build id.
+- Opposite of a hobbyist rolling desktop.
+
+### 5.2 Strong SSO (headline)
+
+- **Primary:** Entra ID join / SSO.
+- **Secondary:** classic AD via sssd (documented; automate only if Rohi picks it for MVP).
+- Done = standard user unlocks with org identity; home is not a local-only orphan.
+- Non-goal: inventing our own IdP.
+
+### 5.3 Curated apps
+
+- A **declared** org-approved app set (seed list in-repo): browsers, collab, security agents, etc. as Rohi/IT name them.
+- Delivery: baked into the image for the default profile, and/or installable only from our gated set.
+- Out of MVP: unlimited user choice from upstream stores without policy.
+- Flatpak allowlist is acceptable *only* as a curated list we pin — not “Flathub unbounded.”
+
+### 5.4 Controlled plugin marketplace (concept)
+
+- **What it is:** a catalog of plugins / extensions **we** build or vendor, reviewed, and published through *our* channel.
+- **What it is not:** arbitrary third-party uploads, unsigned blobs, or “npm of the desktop.”
+- **Day 1:** document the shape + empty catalog / placeholder API; **do not** claim a live store.
+- **Before public “install plugin”:** signing keys, update/revoke story, and Sam-clear supply chain.
+- Optional for a given org: marketplace can be disabled; curated apps + frozen core + SSO still stand.
+
+### 5.5 Image / supply (CI → image)
+
+- Source of truth: this repo (autoinstall, cloud-init, app seed, harden, pins).
+- CI builds bootable artifact on tag; checksums always; **signing when keys exist**.
+- No hand-rolled laptop ISOs as the release process.
+- First-boot helpers only touch files/links this project owns (marker + checksum).
+
+### 5.6 Harden + updates
+
+- Laptop: disk encryption default; firewall on; SSH off by default (break-glass profile only).
+- Unattended **security** updates; no silent major upgrades.
+- Baseline checklists (USG / CIS-oriented) as implementation guides — not certification claims.
+- Inventory: build id visible for fleet drift.
+
+---
+
+## 6. MVP boundary (about 4–8 weeks cognitive)
 
 **In**
 
-1. Public repo + this ADR + short README (what / why / non-goals).
-2. One **laptop-oriented** Ubuntu 24.04 autoinstall seed (packages + harden hooks + pins).
-3. CI that builds *something bootable in a VM* on tag (even if ugly) with checksums; signing when keys exist.
-4. Identity path documented + scripted for **one** of: Entra join *or* AD/sssd (pick with Rohi — default proposal Entra).
-5. Update path: security unattended-upgrades on; major upgrade off.
-6. Inventory: build id in custom os-release fields or a small fact file.
-7. Docs: install in VM, join identity, verify updates — three pages max.
+1. Repo + this ADR + short README (product thesis / non-goals — not “Ubuntu remix”).
+2. One laptop-oriented Ubuntu 24.04 autoinstall seed with **pins + curated app seed** (even if the seed is small).
+3. CI → VM-bootable artifact + checksums (signing when keys exist).
+4. **Strong SSO path** scripted for one of Entra or AD (default proposal: Entra).
+5. Security unattended-upgrades on; major upgrade off; build id fact.
+6. Marketplace: **docs + stub only** (catalog empty; no install UX that pretends plugins are live).
+7. Short verify docs: VM install → SSO → updates → app seed present.
 
-**Out (explicit)**
+**Out**
 
-- Custom kernel, Secure Boot signing infrastructure beyond “document what we need”.
-- Full MDM, compliance dashboards, device attestation product.
-- Rocky track, Arch freeze mirror product, personal-desktop flavors.
-- Guarantees about battery life, GPU, or dock support matrices.
-- Support SLAs.
+- Live plugin marketplace, third-party submissions, public trust claims without keys.
+- Custom kernel / full Secure Boot PKI beyond documenting needs.
+- Full MDM / compliance product.
+- Rocky or Arch tracks.
+- Support SLAs; hardware guarantee matrices.
 
 ---
 
-## 7. Suggested layout (repo skeleton)
+## 7. Suggested layout
 
 ```
-README.md                 # short: what / why / non-goals
-LICENSE                   # MIT
+README.md
+LICENSE
 docs/ARCHITECTURE.md      # this file
-docs/IDENTITY.md          # stub until path chosen
-docs/HARDENING.md         # stub checklist
-docs/IMAGE-PIPELINE.md    # stub CI → artifact
-image/                    # autoinstall / cloud-init seeds
-scripts/                  # harden / first-boot helpers
-.github/workflows/        # build on tag (when workflow scope exists)
+docs/IDENTITY.md
+docs/HARDENING.md
+docs/IMAGE-PIPELINE.md
+docs/CURATED-APPS.md      # seed list + policy (stub OK)
+docs/MARKETPLACE.md       # concept + non-goals for third-party (stub OK)
+image/
+scripts/
+catalog/                  # placeholder for later controlled plugins (empty)
+.github/workflows/        # when workflow scope exists
 ```
 
-No ISO blobs in git. Artifacts live on Releases.
+No ISO blobs in git. Artifacts on Releases.
 
 ---
 
 ## 8. Open questions for Rohi
 
-1. **Identity wedge:** Entra-first (recommended), AD-first, or both in MVP?
-2. **Name lock:** keep `enterprise-linux`, or prefer a short product name (still English, still boring)?
-3. **RHEL-compatible:** is Rocky a hard day-1 requirement for a named customer, or later track?
-4. **Arch:** any hard criterion that would force an Arch frozen-core track instead of Ubuntu LTS? (Default: no.)
-5. **Signing:** do we have (or will we create) a release-signing key before public image claims?
-6. **Fleet assumption:** tens of machines (script + docs OK) or hundreds (needs inventory + update policy sooner)?
-
-Visibility is already **public MIT** on `RohiRIK/enterprise-linux` unless Rohi flips it.
+1. **Identity:** Entra-first (recommended), AD-first, or both in MVP?
+2. **Name lock:** keep `enterprise-linux` or a short product name?
+3. **Curated app seed v0:** which apps are must-have on the first image?
+4. **Marketplace timing:** stub-only through MVP (recommended), or a single first-party plugin as proof?
+5. **Rocky / Arch:** any hard customer criterion, or Ubuntu substrate only for now?
+6. **Signing:** when do release + plugin signing keys get created?
+7. **Fleet size:** tens (docs + scripts) vs hundreds (inventory/update policy sooner)?
 
 ---
 
@@ -166,13 +176,13 @@ Visibility is already **public MIT** on `RohiRIK/enterprise-linux` unless Rohi f
 
 | Topic | Decision |
 |---|---|
-| Product wedge | Org **workstations**, frozen core — not rolling desktop |
-| Base | **Vanilla Ubuntu 24.04 LTS** |
-| Arch | Scouted; **do not adopt** unless a hard criterion wins |
-| Rocky | Later track if RHEL shops appear |
-| Personal desktop projects | **Decoupled** — out of scope for this product |
-| Pillars | SSO, harden, CI→image (sign when keys exist), controlled updates |
+| Product | Curated org workstation — **not** “just Ubuntu” |
+| Substrate | **Ubuntu 24.04 LTS** |
+| Pillars | Frozen core + **strong SSO** + curated apps + controlled marketplace (concept) |
+| Marketplace | First-party / we-prepare only; no third-party free-for-all; not live yet |
+| Arch / Rocky | Out unless hard criterion |
+| Personal desktop projects | Decoupled — out of scope |
 | License | MIT |
-| Next | Image pipeline after Rohi answers §8 |
+| Next | Docs SHIP this revise; image pipeline after §8 answers |
 
-When Rohi answers §8, revise this ADR in place and unlock the image-pipeline SHIP.
+When Rohi answers §8, revise in place and unlock image-pipeline + app-seed SHIP.

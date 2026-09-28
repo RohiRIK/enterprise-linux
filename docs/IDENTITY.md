@@ -1,5 +1,7 @@
-# Identity
+# Identity (strong SSO)
 
-Stub. Path TBD after Rohi picks Entra-first vs AD/sssd (see `docs/ARCHITECTURE.md` §5.1 and §8).
+Stub. Headline pillar — see `docs/ARCHITECTURE.md` §5.2 and §8.
+
+Path TBD after Rohi picks Entra-first (recommended) vs AD/sssd.
 
 Do not claim a working join story until scripts and a verified VM path exist.
