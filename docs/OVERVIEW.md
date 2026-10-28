@@ -73,6 +73,7 @@ Do not read older notes as “we are an Ubuntu product.” Substrate is the plat
 | [`FEATURE-IDEAS.md`](FEATURE-IDEAS.md) | Concept backlog — **ideas only, not shipped** |
 | [`RESEARCH-ENTERPRISE-DISTROS.md`](RESEARCH-ENTERPRISE-DISTROS.md) | What Red Hat, Canonical, SUSE, Microsoft, and immutable desktops already do |
 | [`CONTROL-API.md`](CONTROL-API.md) | CLI/API for everything — the MDM and EDR contract (design) |
+| [`AGENT.md`](AGENT.md) | Our own agent with connectors to Intune and other MDMs (design) |
 | [`PERMISSIONS.md`](PERMISSIONS.md) | Roles, JIT admin, directory-driven sudo/polkit (design) |
 | [`ENCRYPTION.md`](ENCRYPTION.md) | Disk + transit encryption, TPM2, key escrow (design) |
 | [`DESKTOP-UX.md`](DESKTOP-UX.md) | Daily-use GUI, tiered customization, IT app (design) |

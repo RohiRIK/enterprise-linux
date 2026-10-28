@@ -133,6 +133,10 @@ The candidate set is documented in [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md
 - Resource model: **facts / settings / actions / events**; declarative, idempotent policy documents; every call authorized (polkit + roles) and audited.
 - Detail: [`CONTROL-API.md`](CONTROL-API.md).
 
+### 5.9a Own management agent (design)
+
+- `el-agent` with pluggable MDM connectors; Intune via its script + custom compliance channels (spike first). Detail: [`AGENT.md`](AGENT.md).
+
 ### 5.10 Permissions (design)
 
 - No standing local admin; roles (user, power-user, helpdesk, local-admin, break-glass, agent service principals) mapped from directory groups; JIT elevation with expiry; offline cache.
@@ -194,6 +198,7 @@ docs/AI-RESEARCH.md          # AI-for-investigation; no ship claim
 docs/FEATURE-IDEAS.md         # ideas-only concept backlog; not shipped
 docs/RESEARCH-ENTERPRISE-DISTROS.md  # what RHEL / Ubuntu / SUSE / others do
 docs/CONTROL-API.md          # CLI/API for everything (MDM + EDR contract)
+docs/AGENT.md                # own agent with multi-MDM connectors (Intune spike)
 docs/PERMISSIONS.md          # roles, JIT elevation, polkit/sudo from directory
 docs/ENCRYPTION.md           # LUKS2 + TPM2, escrow, crypto profile
 docs/DESKTOP-UX.md           # daily GUI, tiered customization, IT app
