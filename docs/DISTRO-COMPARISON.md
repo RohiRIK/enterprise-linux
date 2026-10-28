@@ -151,6 +151,12 @@ Scale: **Strong / Adequate / Weak** for *org workstation product* fit. Judgments
 - **Ubuntu** wins on laptop + build speed; MDM strength is **Adequate** until we add a named enroll path (Intune Linux and/or Fleet/Landscape). Rohi’s “stock Ubuntu insufficient” is about *stock*, not about “Ubuntu cannot be made MDM-ready.”
 - **Custom** loses MDM unless MDM *is* the engineering centerpiece.
 
+### Vendor support lists (added 2026-10-28)
+- **Intune for Linux** supports only **Ubuntu 24.04/26.04 LTS and RHEL 9/10**. Rocky, Alma, Debian, and SUSE are not on the list. If Intune compliance is a day-1 must-have, the shortlist is Ubuntu or RHEL.
+- **Defender for Endpoint** supports nearly every candidate, but treats customized derivatives as "custom configuration" — keep our image recognizably upstream.
+- Ubuntu 26.04 LTS (April 2026) adds TPM-backed FDE (GA), authd for Entra/Google login, and sudo-rs by default; RHEL 10 adds image mode (bootc) and post-quantum key exchange.
+- Detail and sources: [`RESEARCH-ENTERPRISE-DISTROS.md`](RESEARCH-ENTERPRISE-DISTROS.md).
+
 ### Automatic locked updates
 - All LTS/stable candidates can do policy-bound security updates.
 - Differentiator is **our** image policy (on by default, reboot windows, no silent major upgrades) — substrate must not fight that. All listed except raw Arch-style rolling are fine; Custom must invent the train.
