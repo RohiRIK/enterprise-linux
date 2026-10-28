@@ -47,12 +47,17 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 - [`docs/DISTRO-COMPARISON.md`](docs/DISTRO-COMPARISON.md) — substrate decision input; no base locked
 - [`docs/IDENTITY.md`](docs/IDENTITY.md) — SSO stub
 - [`docs/MDM.md`](docs/MDM.md) — target story + hooks (**no live claim**)
-- [`docs/HARDENING.md`](docs/HARDENING.md) — locked updates / harden stub
+- [`docs/HARDENING.md`](docs/HARDENING.md) — layered security mechanisms + locked updates (design)
 - [`docs/IMAGE-PIPELINE.md`](docs/IMAGE-PIPELINE.md) — stub
-- [`docs/CURATED-APPS.md`](docs/CURATED-APPS.md) — stub
+- [`docs/CURATED-APPS.md`](docs/CURATED-APPS.md) — selectable app bundles (design)
 - [`docs/MARKETPLACE.md`](docs/MARKETPLACE.md) — concept stub (**not live**)
 - [`docs/AI-RESEARCH.md`](docs/AI-RESEARCH.md) — AI-for-investigation research stub (**no ship claim**)
 - [`docs/FEATURE-IDEAS.md`](docs/FEATURE-IDEAS.md) — ideas-only concept backlog (**not shipped**)
+- [`docs/RESEARCH-ENTERPRISE-DISTROS.md`](docs/RESEARCH-ENTERPRISE-DISTROS.md) — what RHEL / Ubuntu / SUSE / others do
+- [`docs/CONTROL-API.md`](docs/CONTROL-API.md) — CLI/API for everything, MDM + EDR contract (design)
+- [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md) — roles + JIT admin (design)
+- [`docs/ENCRYPTION.md`](docs/ENCRYPTION.md) — LUKS2 + TPM2 + escrow (design)
+- [`docs/DESKTOP-UX.md`](docs/DESKTOP-UX.md) — daily GUI with tiered customization (design)
 
 ## License
 

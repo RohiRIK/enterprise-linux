@@ -30,6 +30,8 @@ These are the headline pillars. MVP would ship a subset. None of them is a live 
 6. **Locked automatic updates** — pre-hardened image; security/system updates on by policy; no silent major upgrades; not an unpatched DIY box.
 7. **AI-for-investigation** — a **research** track for one distinct capability. **Not shipping.** Not “AI OS.” Not a chatbot on the login screen.
 
+Cross-cutting design added 2026-10-28 (all **design only**): one **CLI/API for everything** so MDM and EDR can integrate cleanly, **directory-driven permissions** with just-in-time admin, **encryption with escrow** by default, **layered security** borrowed from RHEL, **selectable app bundles**, and a **daily-use desktop** where users personalize inside an org-defined fence.
+
 **Locked ahead of time** means the default image is constrained before it reaches the user (apps, harden, update policy, identity hooks, MDM hooks) — not a blank install.
 
 ---
@@ -63,12 +65,17 @@ Do not read older notes as “we are an Ubuntu product.” Substrate is the plat
 | [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md) | Substrate decision input; **no base locked** |
 | [`IDENTITY.md`](IDENTITY.md) | SSO stub |
 | [`MDM.md`](MDM.md) | MDM target story + hooks (**no live claim**) |
-| [`HARDENING.md`](HARDENING.md) | Harden + locked updates stub |
+| [`HARDENING.md`](HARDENING.md) | Layered security mechanisms + locked updates (design) |
 | [`IMAGE-PIPELINE.md`](IMAGE-PIPELINE.md) | Image build stub |
-| [`CURATED-APPS.md`](CURATED-APPS.md) | Curated apps stub |
+| [`CURATED-APPS.md`](CURATED-APPS.md) | Selectable app bundles + catalog rules (design) |
 | [`MARKETPLACE.md`](MARKETPLACE.md) | Marketplace concept (**not live**) |
 | [`AI-RESEARCH.md`](AI-RESEARCH.md) | AI-for-investigation research (**no ship claim**) |
 | [`FEATURE-IDEAS.md`](FEATURE-IDEAS.md) | Concept backlog — **ideas only, not shipped** |
+| [`RESEARCH-ENTERPRISE-DISTROS.md`](RESEARCH-ENTERPRISE-DISTROS.md) | What Red Hat, Canonical, SUSE, Microsoft, and immutable desktops already do |
+| [`CONTROL-API.md`](CONTROL-API.md) | CLI/API for everything — the MDM and EDR contract (design) |
+| [`PERMISSIONS.md`](PERMISSIONS.md) | Roles, JIT admin, directory-driven sudo/polkit (design) |
+| [`ENCRYPTION.md`](ENCRYPTION.md) | Disk + transit encryption, TPM2, key escrow (design) |
+| [`DESKTOP-UX.md`](DESKTOP-UX.md) | Daily-use GUI, tiered customization, IT app (design) |
 
 ---
 

@@ -3,7 +3,7 @@
 **Status:** concept ADR (not a shipping OS)  
 **Owner:** cto-max-grok  
 **Repo:** `RohiRIK/enterprise-linux`  
-**Date:** 2026-09-28 (revised: MDM headline + AI-for-investigation research + locked auto-updates)
+**Date:** 2026-09-28 (revised: MDM headline + AI-for-investigation research + locked auto-updates; 2026-10-28: control API, permissions, encryption, security layers, desktop UX)
 
 This document is design-only. No ISO, no distro fork, no support contract claims. No live MDM connector, marketplace, or AI feature shipping yet.
 
@@ -125,6 +125,34 @@ The candidate set is documented in [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md
 
 - CI → bootable artifact on tag; checksums always; **signing when keys exist**.
 - First-boot only touches project-owned paths (marker + checksum).
+- Every build emits an SBOM and (when keys exist) a signature; see [`HARDENING.md`](HARDENING.md) §3.
+
+### 5.9 Control API: CLI/API for everything (design)
+
+- One local daemon (`eld`, working name) + CLI (`elctl`) + D-Bus + REST over a Unix socket. The desktop GUI, MDM agents, EDR agents, and Ansible are all clients of the same API.
+- Resource model: **facts / settings / actions / events**; declarative, idempotent policy documents; every call authorized (polkit + roles) and audited.
+- Detail: [`CONTROL-API.md`](CONTROL-API.md).
+
+### 5.10 Permissions (design)
+
+- No standing local admin; roles (user, power-user, helpdesk, local-admin, break-glass, agent service principals) mapped from directory groups; JIT elevation with expiry; offline cache.
+- Detail: [`PERMISSIONS.md`](PERMISSIONS.md).
+
+### 5.11 Encryption (design)
+
+- LUKS2 + TPM2 (optionally + PIN or network-bound) before first login; recovery key escrowed and rotated; one system crypto profile incl. post-quantum key exchange; removable-media policy.
+- Detail: [`ENCRYPTION.md`](ENCRYPTION.md).
+
+### 5.12 Security mechanisms (design)
+
+- Layered: Secure Boot + signed UKI, measured boot, read-only system (target), MAC (SELinux/AppArmor), application allowlisting, USB control, default-deny firewall, audit, EDR slot, scheduled SCAP compliance.
+- Detail: [`HARDENING.md`](HARDENING.md).
+
+### 5.13 Desktop UX (design)
+
+- Familiar GNOME layout (recommended), **tiered customization** (locked / org default / user), and one first-party IT app (status, App Center, updates, access requests, help).
+- Selectable app **bundles** at build, enrollment, or self-service: [`CURATED-APPS.md`](CURATED-APPS.md).
+- Detail: [`DESKTOP-UX.md`](DESKTOP-UX.md).
 
 ---
 
@@ -164,6 +192,11 @@ docs/MARKETPLACE.md          # concept / not live
 docs/MDM.md                  # target story + hooks; no live claim
 docs/AI-RESEARCH.md          # AI-for-investigation; no ship claim
 docs/FEATURE-IDEAS.md         # ideas-only concept backlog; not shipped
+docs/RESEARCH-ENTERPRISE-DISTROS.md  # what RHEL / Ubuntu / SUSE / others do
+docs/CONTROL-API.md          # CLI/API for everything (MDM + EDR contract)
+docs/PERMISSIONS.md          # roles, JIT elevation, polkit/sudo from directory
+docs/ENCRYPTION.md           # LUKS2 + TPM2, escrow, crypto profile
+docs/DESKTOP-UX.md           # daily GUI, tiered customization, IT app
 image/
 scripts/
 catalog/                     # empty
@@ -184,6 +217,12 @@ No ISO blobs in git.
 6. **AI-for-investigation brief:** any constraint (must be offline? must use org IdP? must not leave tenant?) before exploration?
 7. **Signing:** when for image + future plugins?
 8. **Fleet size:** tens vs hundreds?
+9. **Intune compliance on day 1?** Intune Linux supports only Ubuntu 24.04/26.04 and RHEL 9/10 — a "yes" narrows the substrate to those two (see [`RESEARCH-ENTERPRISE-DISTROS.md`](RESEARCH-ENTERPRISE-DISTROS.md) §4).
+10. **Image-based (bootc/ostree) or package-based** system? See [`HARDENING.md`](HARDENING.md) §4.
+11. **Desktop:** GNOME (recommended) or KDE Plasma?
+12. **Encryption unlock default:** TPM2 only, or TPM2 + PIN? Escrow target?
+13. **Control daemon language:** Rust or Go?
+14. **Power-user role** in v1 (developers with containers), or user/helpdesk/admin only?
 
 ---
 
@@ -204,3 +243,5 @@ When Rohi answers §8, revise in place and unlock the next SHIP gate.
 ## 10. Related docs
 
 See [`FEATURE-IDEAS.md`](FEATURE-IDEAS.md) for the ideas-only concept backlog; none of those ideas are shipped or product claims.
+
+Design detail added 2026-10-28: [`RESEARCH-ENTERPRISE-DISTROS.md`](RESEARCH-ENTERPRISE-DISTROS.md), [`CONTROL-API.md`](CONTROL-API.md), [`PERMISSIONS.md`](PERMISSIONS.md), [`ENCRYPTION.md`](ENCRYPTION.md), [`HARDENING.md`](HARDENING.md), [`CURATED-APPS.md`](CURATED-APPS.md), [`DESKTOP-UX.md`](DESKTOP-UX.md). All design only; nothing built.
