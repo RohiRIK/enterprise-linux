@@ -1,0 +1,39 @@
+[Unit]
+Description=enterprise-linux control daemon (eld)
+Documentation=https://github.com/RohiRIK/enterprise-linux/blob/main/docs/CONTROL-API.md
+After=local-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/eld --config /etc/eld/eld.json
+Restart=on-failure
+RestartSec=2s
+
+# eld runs native tools as root (apt/dnf, cryptsetup, loginctl), so the
+# filesystem stays writable; everything else is narrowed. A MAC profile
+# (SELinux/AppArmor) for eld is planned, see docs/HARDENING.md.
+RuntimeDirectory=eld
+RuntimeDirectoryMode=0755
+StateDirectory=eld
+StateDirectoryMode=0700
+LogsDirectory=eld
+LogsDirectoryMode=0700
+UMask=0077
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+# AF_INET/6 are only for the package managers eld runs; eld itself never
+# opens a network listener.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

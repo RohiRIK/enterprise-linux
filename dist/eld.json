@@ -1,0 +1,15 @@
+{
+  "socket": "/run/eld/api.sock",
+  "stateDir": "/var/lib/eld",
+  "auditLog": "/var/log/eld/audit.jsonl",
+  "journald": true,
+  "groupRoles": {
+    "eld-helpdesk": "helpdesk",
+    "eld-admins": "local-admin"
+  },
+  "servicePrincipals": [
+    { "name": "mdm-agent", "user": "el-agent", "role": "svc:mdm" }
+  ],
+  "destructivePerMinute": 3,
+  "maxGrantMinutes": 480
+}

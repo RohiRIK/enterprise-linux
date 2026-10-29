@@ -30,7 +30,7 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 - No open third-party app/plugin free-for-all.
 - No **live** MDM integration, marketplace, signed-plugin trust, or AI feature claims until each exists and is reviewed.
 - No Windows-native clients; this is a Linux-only product.
-- No Intune/Jamf badges, and no new dependencies.
+- No Intune/Jamf badges. Code dependencies stay a minimal, reviewed set (today: serde, serde_json, libc for `eld`/`elctl`).
 - No AI-washing (“AI OS”) or bolting a chatbot on login.
 - No building a full MDM *vendor* that replaces Intune/Jamf on day 1 — we integrate / are ready for org MDM.
 - No FedRAMP/CIS certification claims; no ISO in this repo yet.
@@ -38,7 +38,7 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 
 ## Status
 
-**Concept only.** Substrate: under comparison, not locked. MDM, marketplace, and AI are docs/research stubs — not live. Open questions for Rohi are in the ADR and the [distro comparison](docs/DISTRO-COMPARISON.md).
+**Concept, plus one working prototype:** the control daemon `eld` and CLI `elctl` (Rust, `crates/`) — facts, policy, actions, roles, audit and events over a local socket; most settings are recorded but not yet enforced, see [`docs/ELD.md`](docs/ELD.md). Substrate: under comparison, not locked. MDM, marketplace, and AI are docs/research stubs — not live. Open questions for Rohi are in the ADR and the [distro comparison](docs/DISTRO-COMPARISON.md).
 
 ## Docs
 
@@ -55,6 +55,7 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 - [`docs/FEATURE-IDEAS.md`](docs/FEATURE-IDEAS.md) — ideas-only concept backlog (**not shipped**)
 - [`docs/RESEARCH-ENTERPRISE-DISTROS.md`](docs/RESEARCH-ENTERPRISE-DISTROS.md) — what RHEL / Ubuntu / SUSE / others do
 - [`docs/CONTROL-API.md`](docs/CONTROL-API.md) — CLI/API for everything, MDM + EDR contract (design)
+- [`docs/ELD.md`](docs/ELD.md) — eld/elctl v0 prototype: build, run, what is and is not done
 - [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md) — roles + JIT admin (design)
 - [`docs/ENCRYPTION.md`](docs/ENCRYPTION.md) — LUKS2 + TPM2 + escrow (design)
 - [`docs/DESKTOP-UX.md`](docs/DESKTOP-UX.md) — daily GUI with tiered customization (design)

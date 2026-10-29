@@ -1,6 +1,6 @@
 # Control API: CLI and API for everything
 
-**Status:** design only — nothing built. Names (`eld`, `elctl`) are working names.  
+**Status:** design, with a working v0 prototype in Rust (`crates/`); see [ELD.md](ELD.md) for what is built and what is not. Names (`eld`, `elctl`) are working names.  
 **Date:** 2026-10-28  
 **Related:** [MDM.md](MDM.md), [PERMISSIONS.md](PERMISSIONS.md), [HARDENING.md](HARDENING.md), [RESEARCH-ENTERPRISE-DISTROS.md](RESEARCH-ENTERPRISE-DISTROS.md)
 
@@ -82,7 +82,7 @@ Four kinds of things, the same for every domain:
 
 ---
 
-## 4. Examples (illustrative, not implemented)
+## 4. Examples
 
 ```bash
 # Facts
@@ -170,7 +170,7 @@ Policies are **declarative and idempotent**: applying the same document twice ch
 
 ## 7. Open questions
 
-1. Daemon language: Rust (memory safety, matches sudo-rs direction) vs Go (faster agent ecosystem)?
+1. ~~Daemon language: Rust vs Go?~~ **Decided 2026-10-29: Rust**, minimal dependencies (serde, serde_json, libc). See [ELD.md](ELD.md).
 2. Do we expose an opt-in mTLS network listener at all, or always rely on the MDM/EDR agent on the box?
 3. Which MDM do we write the first reference wrapper for (Intune custom compliance, Fleet, Landscape)?
-4. Should the policy format be compatible with an existing standard (e.g. osquery/Fleet policies, Kubernetes-style YAML as drafted above)?
+4. Policy files are JSON in v0; YAML input needs a parser dependency. Should the policy format be compatible with an existing standard (e.g. osquery/Fleet policies, Kubernetes-style YAML as drafted above)?
