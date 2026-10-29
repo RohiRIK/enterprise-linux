@@ -55,6 +55,7 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 - [`docs/FEATURE-IDEAS.md`](docs/FEATURE-IDEAS.md) — ideas-only concept backlog (**not shipped**)
 - [`docs/RESEARCH-ENTERPRISE-DISTROS.md`](docs/RESEARCH-ENTERPRISE-DISTROS.md) — what RHEL / Ubuntu / SUSE / others do
 - [`docs/CONTROL-API.md`](docs/CONTROL-API.md) — CLI/API for everything, MDM + EDR contract (design)
+- [`docs/AGENT.md`](docs/AGENT.md) — own agent with multi-MDM connectors (design)
 - [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md) — roles + JIT admin (design)
 - [`docs/ENCRYPTION.md`](docs/ENCRYPTION.md) — LUKS2 + TPM2 + escrow (design)
 - [`docs/DESKTOP-UX.md`](docs/DESKTOP-UX.md) — daily GUI with tiered customization (design)
