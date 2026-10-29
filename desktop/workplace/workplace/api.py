@@ -632,8 +632,8 @@ def _demo_facts(now):
                 "/org/gnome/desktop/screensaver/lock-delay",
                 "/org/gnome/desktop/session/idle-delay",
                 "/org/gnome/desktop/lockdown/disable-lock-screen",
-                "/org/gnome/shell/allowed-extensions",
-                "/org/gnome/system/proxy/",
+                "/org/gnome/shell/enabled-extensions",
+                "/org/gnome/system/proxy/mode",
             ],
             "default_apps": {
                 "browser": {"current": "org.mozilla.firefox", "locked": False,

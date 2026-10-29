@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Launcher installed as /usr/bin/workplace."""
+import os
+import sys
+
+# Allow running from a source checkout: desktop/workplace/bin/workplace
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
+
+from workplace.__main__ import main  # noqa: E402
+
+sys.exit(main())
