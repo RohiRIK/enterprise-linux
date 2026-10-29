@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  enterprise-linux: system-wide LibreOffice defaults (registry layer).
+
+  Installed by catalog/bundles/office-oss.yaml (app libreoffice, native only) to
+    apt:    /usr/lib/libreoffice/share/registry/enterprise-linux.xcd
+    dnf:    /usr/lib64/libreoffice/share/registry/enterprise-linux.xcd
+    zypper: /usr/lib64/libreoffice/share/registry/enterprise-linux.xcd
+
+  oor:finalized="true" = locked, the user cannot change it in Tools > Options.
+  Props without it are defaults the user may override.
+  Status: design stage, not tested on a real install. Lines marked "verify"
+  need checking against the officecfg schema of the shipped LibreOffice version.
+-->
+<oor:data xmlns:xs="http://www.w3.org/2001/XMLSchema"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xmlns:oor="http://openoffice.org/2001/registry">
+  <dependency file="main"/>
+
+  <!-- 1. Macro security: 3 = "Very high" (only macros from trusted locations run;
+          none are configured). Locked. -->
+  <item oor:path="/org.openoffice.Office.Common/Security/Scripting">
+    <prop oor:name="MacroSecurityLevel" oor:op="fuse" oor:finalized="true">
+      <value>3</value>
+    </prop>
+  </item>
+
+  <!-- 2. Default save format = Office Open XML (.docx / .xlsx / .pptx).
+          DOCUMENTED CHOICE: chosen because most orgs exchange files with
+          Microsoft 365 users. Orgs that standardise on ODF delete this block
+          (LibreOffice then saves .odt / .ods / .odp). Not locked: users may
+          still pick ODF in Tools > Options > Load/Save > General. -->
+  <item oor:path="/org.openoffice.Setup/Office/Factories/org.openoffice.Setup:Factory['com.sun.star.text.TextDocument']">
+    <prop oor:name="ooSetupFactoryDefaultFilter" oor:op="fuse">
+      <value>MS Word 2007 XML</value>
+    </prop>
+  </item>
+  <item oor:path="/org.openoffice.Setup/Office/Factories/org.openoffice.Setup:Factory['com.sun.star.sheet.SpreadsheetDocument']">
+    <prop oor:name="ooSetupFactoryDefaultFilter" oor:op="fuse">
+      <value>Calc MS Excel 2007 XML</value>
+    </prop>
+  </item>
+  <item oor:path="/org.openoffice.Setup/Office/Factories/org.openoffice.Setup:Factory['com.sun.star.presentation.PresentationDocument']">
+    <prop oor:name="ooSetupFactoryDefaultFilter" oor:op="fuse">
+      <value>Impress MS PowerPoint 2007 XML</value>
+    </prop>
+  </item>
+
+  <!-- 3. Do not show the "Use Word/Excel format or ODF?" (keep current format)
+          dialog on every save. -->
+  <item oor:path="/org.openoffice.Office.Common/Save/Document">
+    <prop oor:name="WarnAlienFormat" oor:op="fuse">
+      <value>false</value>
+    </prop>
+  </item>
+
+  <!-- 4. Online update check off: updates come from the OS package manager.
+          Distro builds often ship without the update checker; then this is a
+          harmless no-op. verify -->
+  <item oor:path="/org.openoffice.Office.Jobs/Jobs/org.openoffice.Office.Jobs:Job['UpdateCheck']/Arguments">
+    <prop oor:name="AutoCheckEnabled" oor:op="fuse" oor:finalized="true">
+      <value>false</value>
+    </prop>
+  </item>
+
+  <!-- 5. No crash-report upload to the LibreOffice project. verify -->
+  <item oor:path="/org.openoffice.Office.Common/Misc">
+    <prop oor:name="CrashReport" oor:op="fuse" oor:finalized="true">
+      <value>false</value>
+    </prop>
+  </item>
+
+  <!-- 6. Quiet first-run UI: no donation / get-involved / what's-new infobars,
+          no tip-of-the-day dialog. Prop names verify (they changed across
+          LibreOffice releases; unknown props are ignored with a warning). -->
+  <item oor:path="/org.openoffice.Office.Common/Misc">
+    <prop oor:name="ShowDonation" oor:op="fuse">
+      <value>false</value>
+    </prop>
+  </item>
+  <item oor:path="/org.openoffice.Office.Common/Misc">
+    <prop oor:name="ShowGetInvolved" oor:op="fuse">
+      <value>false</value>
+    </prop>
+  </item>
+  <item oor:path="/org.openoffice.Office.Common/Misc">
+    <prop oor:name="ShowTipOfTheDay" oor:op="fuse">
+      <value>false</value>
+    </prop>
+  </item>
+
+  <!-- 7. AutoRecovery: save recovery information every 5 minutes. -->
+  <item oor:path="/org.openoffice.Office.Recovery/AutoSave">
+    <prop oor:name="Enabled" oor:op="fuse">
+      <value>true</value>
+    </prop>
+  </item>
+  <item oor:path="/org.openoffice.Office.Recovery/AutoSave">
+    <prop oor:name="TimeIntervall" oor:op="fuse">
+      <!-- minutes; the double "l" is the real schema spelling -->
+      <value>5</value>
+    </prop>
+  </item>
+  <item oor:path="/org.openoffice.Office.Recovery/RecoveryInfo">
+    <prop oor:name="Enabled" oor:op="fuse">
+      <value>true</value>
+    </prop>
+  </item>
+</oor:data>

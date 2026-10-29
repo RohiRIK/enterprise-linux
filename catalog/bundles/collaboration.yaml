@@ -1,0 +1,30 @@
+# Collaboration: meetings and chat. Microsoft Teams is a web app in office-microsoft365
+# (Microsoft retired the native Teams client for Linux).
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: collaboration
+  version: 2026.10.0
+  owner: it-platform
+  description: Meeting and chat clients other than Teams (Zoom, Slack) as sandboxed Flatpaks.
+spec:
+  removable: true
+  includes: [core]
+  apps:
+    - id: zoom
+      name: Zoom Workplace
+      category: meetings
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Vendor binary. Flathub build is community-packaged from the vendor binary; screen sharing goes through the portal.
+      install:
+        flatpak: { ref: us.zoom.Zoom, remote: curated }
+
+    - id: slack
+      name: Slack
+      category: chat
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Vendor binary, community-packaged on Flathub. Prefer the web app if the org does not need desktop notifications.
+      install:
+        flatpak: { ref: com.slack.Slack, remote: curated }

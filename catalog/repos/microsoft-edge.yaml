@@ -1,0 +1,16 @@
+# Microsoft Edge vendor repo. Design stage: not yet mirrored or tested.
+# The key is Microsoft's shared packages.microsoft.com signing key
+# (Microsoft (Release signing) <gpgsecurity@microsoft.com>).
+apiVersion: enterprise-linux/v1
+kind: VendorRepo
+metadata: { name: microsoft-edge, owner: it-platform }
+spec:
+  key:
+    url: https://packages.microsoft.com/keys/microsoft.asc
+    fingerprint: BC528686B50D79E339D3721CEB3E94ADBE1229CF
+  apt:    { uri: https://packages.microsoft.com/repos/edge, suite: stable, components: [main] }
+  dnf:    { baseurl: https://packages.microsoft.com/yumrepos/edge }
+  zypper: { baseurl: https://packages.microsoft.com/yumrepos/edge }
+  # Note: microsoft-edge-stable writes its own /etc/apt/sources.list.d/microsoft-edge.list
+  # (or /etc/yum.repos.d/microsoft-edge.repo) on install. The installer must keep
+  # our mirror as the only active source for this repo.

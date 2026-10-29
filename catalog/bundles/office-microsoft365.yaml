@@ -1,0 +1,129 @@
+# Microsoft 365 on the enterprise-linux workstation.
+#
+# There is no Microsoft-supported native Microsoft Office (Word/Excel/
+# PowerPoint/Outlook) for Linux. The supported path is the Microsoft 365 web
+# apps. This bundle pins them as PWAs (installed web apps) through managed
+# browser policy, so they get their own window, launcher and taskbar icon.
+#
+# - Browser: Microsoft Edge (app id `microsoft-edge` from the `browsers`
+#   bundle). Edge is preferred because Microsoft documents Intune enrollment /
+#   Entra ID Conditional Access device compliance with Edge on Linux; other
+#   browsers may fail "compliant device" CA policies. Whether that path works
+#   on this OS is an open question (Intune officially lists Ubuntu and RHEL).
+# - Teams: Microsoft retired the native "Teams for Linux" client in 2022; the
+#   Teams web app / PWA is the path Microsoft points Linux users to.
+# - All PWA pins are written into ONE policy file (WebAppInstallForceList is a
+#   single list policy; several managed JSON files setting the same key do not
+#   merge). That file is attached to `m365-portal`. Blocking an individual app
+#   id (apps.block) is expected to make the installer drop its entry when it
+#   renders the list — the installer does not do that yet (design).
+# - Status: design-stage manifest. Nothing here has been tested.
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: office-microsoft365
+  version: 2026.10.0
+  owner: it-platform
+  description: >-
+    Microsoft 365 web apps (Outlook, Word, Excel, PowerPoint, OneNote,
+    OneDrive, Teams) pinned as PWAs by Microsoft Edge policy. Requires a
+    Microsoft 365 subscription; no native Microsoft Office exists for Linux.
+spec:
+  removable: true
+  includes: [browsers]          # needs app `microsoft-edge` from the browsers bundle
+  apps:
+    - id: m365-portal
+      name: Microsoft 365
+      category: office
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        SaaS; documents live in the org's Microsoft 365 tenant. Online only.
+        Sign-in and device compliance governed by Entra ID Conditional Access.
+      provides: []
+      # Portal URL choice: https://www.office.com/ is the long-standing entry
+      # point; Microsoft now redirects it to https://m365.cloud.microsoft/.
+      # We pin www.office.com because the redirect target has moved before.
+      install:
+        pwa: { url: "https://www.office.com/", browser: microsoft-edge }
+      policies:
+        - file: policies/office/microsoft365/30-m365-pwas.json
+          dest: /etc/opt/edge/policies/managed/30-enterprise-linux-m365-pwas.json
+          # Native Edge reads /etc/opt/edge. Whether Flatpak Edge (com.microsoft.Edge)
+          # sees this host path is unverified. appliesTo filters on THIS app's
+          # install method (pwa), not Edge's, so it is left unset.
+
+    - id: m365-outlook
+      name: Outlook (web)
+      category: mail
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: SaaS mail/calendar; online only (limited offline in the web app).
+      provides: []   # a PWA cannot be the system mailto: handler without extra glue
+      install:
+        pwa: { url: "https://outlook.office.com/mail/", browser: microsoft-edge }
+
+    - id: m365-word
+      name: Word (web)
+      category: office
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: SaaS; full OOXML fidelity for web-supported features; online only.
+      provides: []
+      install:
+        pwa: { url: "https://www.office.com/launch/word", browser: microsoft-edge }
+
+    - id: m365-excel
+      name: Excel (web)
+      category: office
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: SaaS; no VBA macro execution in the web app; online only.
+      provides: []
+      install:
+        pwa: { url: "https://www.office.com/launch/excel", browser: microsoft-edge }
+
+    - id: m365-powerpoint
+      name: PowerPoint (web)
+      category: office
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: SaaS; online only.
+      provides: []
+      install:
+        pwa: { url: "https://www.office.com/launch/powerpoint", browser: microsoft-edge }
+
+    - id: m365-onenote
+      name: OneNote (web)
+      category: office
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: SaaS; online only.
+      provides: []
+      install:
+        pwa: { url: "https://www.office.com/launch/onenote", browser: microsoft-edge }
+
+    - id: m365-onedrive
+      name: OneDrive (web)
+      category: files
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        SaaS; browser access only. There is no Microsoft OneDrive sync client
+        for Linux, so files are not synced to the local disk.
+      provides: []
+      install:
+        pwa: { url: "https://www.office.com/launch/onedrive", browser: microsoft-edge }
+
+    - id: m365-teams
+      name: Microsoft Teams (web)
+      category: collaboration
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        SaaS; the native Teams for Linux client was retired by Microsoft, the
+        web app/PWA is the remaining path. Needs camera/mic/screen-share
+        permission in the browser (PipeWire portal for screen share on Wayland).
+      provides: []
+      install:
+        pwa: { url: "https://teams.microsoft.com/", browser: microsoft-edge }

@@ -1,0 +1,22 @@
+# Open-source-first profile: Firefox ESR default, LibreOffice, Thunderbird.
+# Works without a Microsoft 365 subscription. Edge and Chrome are still
+# installed from the browsers bundle for sites that need them.
+apiVersion: enterprise-linux/v1
+kind: BundleProfile
+metadata:
+  name: open-source
+  description: Open-source first - Firefox ESR, LibreOffice, ONLYOFFICE, Thunderbird; fully offline-capable.
+spec:
+  prefer: [native, flatpak, pwa]
+  bundles: [core, base, browsers, office-oss, accessibility]
+  defaults:
+    browser: firefox-esr
+    office: libreoffice
+    mail: thunderbird
+    pdf: evince
+    image: loupe
+    archive: file-roller
+  settings:
+    homepage: ""                  # empty = no managed homepage
+    m365_tenant_domain: ""
+    auth_server_allowlist: ""

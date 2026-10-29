@@ -1,0 +1,62 @@
+# To enable: move this file to .github/workflows/catalog.yml (the push token
+# used to open this PR has no `workflow` scope, so it could not add it there).
+name: catalog
+
+on:
+  pull_request:
+    paths: [catalog/**, policies/**, scripts/apps/**, .github/workflows/catalog.yml]
+  push:
+    branches: [main]
+    paths: [catalog/**, policies/**, scripts/apps/**, .github/workflows/catalog.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml jsonschema
+      - name: Validate manifests, references, and policy files
+        run: scripts/apps/elapps validate
+      - name: Lint policy files
+        run: |
+          find policies -name '*.json' -print0 | xargs -0 -n1 python -m json.tool --no-ensure-ascii > /dev/null
+          find policies \( -name '*.xcd' -o -name '*.xml' \) -print0 | xargs -0 -n1 python -c 'import sys, xml.etree.ElementTree as E; E.parse(sys.argv[1])'
+
+  # Render every profile on each package family inside a real distro container.
+  # Writes policies and defaults into a scratch root; installs nothing.
+  render:
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:24.04
+            setup: apt-get update && apt-get install -y python3 python3-yaml
+          - image: debian:13
+            setup: apt-get update && apt-get install -y python3 python3-yaml
+          - image: fedora:42
+            setup: dnf install -y python3 python3-pyyaml
+          - image: almalinux:9
+            setup: dnf install -y python3 python3-pyyaml
+          - image: opensuse/leap:15.6
+            setup: zypper --non-interactive install tar gzip python311 python311-PyYAML && ln -sf /usr/bin/python3.11 /usr/local/bin/python3
+    container: ${{ matrix.image }}
+    steps:
+      - run: ${{ matrix.setup }}
+      - uses: actions/checkout@v4
+      - name: Plan and render every profile
+        run: |
+          for p in catalog/profiles/*.yaml; do
+            name=$(basename "$p" .yaml)
+            python3 scripts/apps/elapps plan --profile "$name"
+            root=$(mktemp -d)
+            python3 scripts/apps/elapps apply --profile "$name" --root "$root" --files-only
+            find "$root" -type f | sort
+          done

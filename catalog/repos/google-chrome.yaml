@@ -1,0 +1,19 @@
+# Google Chrome vendor repo. Design stage: not yet mirrored or tested.
+# Key: "Google Inc. (Linux Packages Signing Authority) <linux-packages-keymaster@google.com>".
+# The fingerprint below is the signing key Google has used since 2016; Google
+# rotates signing SUBKEYS from time to time, so the mirror job must check the
+# primary fingerprint and accept current subkeys of it.  # verify current subkey before first mirror
+apiVersion: enterprise-linux/v1
+kind: VendorRepo
+metadata: { name: google-chrome, owner: it-platform }
+spec:
+  key:
+    url: https://dl.google.com/linux/linux_signing_key.pub
+    fingerprint: EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796   # verify
+  apt:    { uri: https://dl.google.com/linux/chrome/deb, suite: stable, components: [main] }
+  dnf:    { baseurl: https://dl.google.com/linux/chrome/rpm/stable/x86_64 }
+  zypper: { baseurl: https://dl.google.com/linux/chrome/rpm/stable/x86_64 }
+  # Note: google-chrome-stable installs /etc/cron.daily/google-chrome, which
+  # re-creates /etc/apt/sources.list.d/google-chrome.list. The installer must
+  # disable that (e.g. /etc/default/google-chrome: repo_add_once=false,
+  # repo_reenable_on_distupgrade=false) so the mirror stays the only source.  # verify

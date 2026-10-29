@@ -1,0 +1,34 @@
+# Hebrew locale pack: fonts and spell checking. The Hebrew keyboard is a standard
+# XKB layout and needs no input method. Office/mail UI translations come from
+# the office bundles' own language packs.
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: locale-he
+  version: 2026.10.0
+  owner: it-platform
+  description: Hebrew fonts and spelling dictionaries (right-to-left support).
+spec:
+  removable: true
+  includes: [core]
+  apps:
+    - id: hebrew-fonts
+      name: Hebrew fonts
+      category: locale
+      license: OFL-1.1
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low.
+      install:
+        apt:    { packages: [fonts-noto-core, fonts-culmus] }
+        dnf:    { packages: [google-noto-sans-hebrew-fonts, google-noto-serif-hebrew-fonts] }
+        zypper: { packages: [google-noto-sans-hebrew-fonts, google-noto-serif-hebrew-fonts] }   # verify package names on openSUSE
+    - id: hebrew-spelling
+      name: Hebrew spelling dictionary
+      category: locale
+      license: AGPL-3.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low.
+      install:
+        apt:    { packages: [hunspell-he] }
+        dnf:    { packages: [hunspell-he] }
+        zypper: { packages: [myspell-he_IL] }   # verify

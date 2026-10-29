@@ -1,0 +1,130 @@
+# Browsers bundle: several managed web browsers, each shipped with enterprise
+# default policies. Design stage: written, not yet tested on any image.
+#
+# Why native packages first: managed-policy paths for Flatpak browsers are not
+# reliable (the sandbox does not see host /etc/opt/... or /etc/chromium/...
+# unless the Flatpak manifest maps it, and community wrappers differ). Every
+# `policies:` entry below is therefore `appliesTo: [native]`. A browser that
+# lands as a Flatpak runs WITHOUT our enterprise policies; the profile's
+# `prefer` order should keep `native` first for this bundle.
+#
+# Policy layout (see policies/browsers/README.md):
+#   Chromium family (Edge, Chrome, Chromium, Brave) gets
+#     policies/browsers/chromium-common/10-baseline.json   shared baseline
+#     policies/browsers/<browser>/20-<browser>.json         per-browser overlay
+#   in the browser's managed dir. Keys in the two files are disjoint.
+#   Firefox gets one policies/browsers/firefox/policies.json.
+#
+# Placeholders used by these policy files (from the profile `settings:`):
+#   {{ homepage }}, {{ m365_tenant_domain }}, {{ auth_server_allowlist }}
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: browsers
+  version: 2026.10.0
+  owner: it-platform
+  description: Managed web browsers (Microsoft Edge, Google Chrome, Firefox ESR) with enterprise default policies. Chromium and Brave are in browsers-extra.
+spec:
+  removable: true
+  includes: []
+  apps:
+
+    # ------------------------------------------------------------------ Edge
+    - id: microsoft-edge
+      name: Microsoft Edge
+      category: browser
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        Vendor binary from Microsoft's repo. Telemetry reduced by policy
+        (DiagnosticData 0, MetricsReportingEnabled false) but not zero.
+        The .deb/.rpm drops its own repo file (microsoft-edge.list / .repo)
+        on install; the installer must reconcile it with our mirror entry.
+        Flathub com.microsoft.Edge is a community wrapper, not Microsoft's;
+        managed policies are not applied to it.
+      provides: [browser]
+      desktopFile: microsoft-edge.desktop
+      install:
+        apt:     { packages: [microsoft-edge-stable], repo: microsoft-edge }
+        dnf:     { packages: [microsoft-edge-stable], repo: microsoft-edge }
+        zypper:  { packages: [microsoft-edge-stable], repo: microsoft-edge }
+        flatpak: { ref: com.microsoft.Edge, remote: curated }   # unofficial wrapper; no managed policy
+      policies:
+        - file: policies/browsers/chromium-common/10-baseline.json
+          dest: /etc/opt/edge/policies/managed/10-enterprise-linux-baseline.json
+          appliesTo: [native]
+        - file: policies/browsers/edge/20-edge.json
+          dest: /etc/opt/edge/policies/managed/20-enterprise-linux-edge.json
+          appliesTo: [native]
+
+    # ---------------------------------------------------------------- Chrome
+    - id: google-chrome
+      name: Google Chrome
+      category: browser
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        Vendor binary from Google's repo. Usage stats off by policy; Safe
+        Browsing still contacts Google (standard protection, hashed prefixes).
+        The .deb installs a cron job / repo file that re-adds
+        dl.google.com to sources; the installer must neutralise it so the
+        mirror stays the only source. Flathub com.google.Chrome is a
+        community wrapper; managed policies are not applied to it.
+      provides: [browser]
+      desktopFile: google-chrome.desktop
+      install:
+        apt:     { packages: [google-chrome-stable], repo: google-chrome }
+        dnf:     { packages: [google-chrome-stable], repo: google-chrome }
+        zypper:  { packages: [google-chrome-stable], repo: google-chrome }
+        flatpak: { ref: com.google.Chrome, remote: curated }    # unofficial wrapper; no managed policy
+      policies:
+        - file: policies/browsers/chromium-common/10-baseline.json
+          dest: /etc/opt/chrome/policies/managed/10-enterprise-linux-baseline.json
+          appliesTo: [native]
+        - file: policies/browsers/chrome/20-chrome.json
+          dest: /etc/opt/chrome/policies/managed/20-enterprise-linux-chrome.json
+          appliesTo: [native]
+
+    # ----------------------------------------------------------- Firefox ESR
+    - id: firefox-esr
+      name: Mozilla Firefox ESR
+      category: browser
+      license: MPL-2.0
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        Open source. ESR is not available on every family: Fedora ships only
+        the rapid-release `firefox` (no ESR package), so on Fedora this app is
+        Firefox rapid release with the same policies. Firefox reads exactly
+        ONE policies.json, so no other bundle may write its own; additions
+        must be merged into policies/browsers/firefox/policies.json.
+        The Flathub build is rapid release, not ESR, and its policy path is
+        not reliable; native is preferred.
+      provides: [browser]
+      # Desktop file name differs per family:
+      #   Debian firefox-esr and Mozilla's APT firefox-esr -> firefox-esr.desktop
+      #   RHEL/Fedora `firefox`, openSUSE `MozillaFirefox`  -> firefox.desktop   # verify (recent Fedora may use org.mozilla.firefox.desktop)
+      #   Flatpak                                          -> org.mozilla.firefox.desktop
+      desktopFile:
+        default: firefox.desktop
+        apt: firefox-esr.desktop
+        flatpak: org.mozilla.firefox.desktop
+      install:
+        # Debian has firefox-esr in main; Ubuntu does not (its `firefox` deb is
+        # a snap transition package), so apt uses Mozilla's own APT repo, which
+        # serves the same package name on both.
+        apt:     { packages: [firefox-esr], repo: mozilla }
+        # RHEL / Alma / Rocky: `firefox` in AppStream IS the ESR build.
+        # Fedora: `firefox` is rapid release; Fedora has no ESR package.
+        dnf:     { packages: [firefox] }
+        # SLES / Leap: MozillaFirefox is ESR. Tumbleweed: rapid release.  # verify per release
+        zypper:  { packages: [MozillaFirefox] }
+        flatpak: { ref: org.mozilla.firefox, remote: curated }   # rapid release, NOT ESR
+      policies:
+        # /etc/firefox/policies/policies.json is Mozilla's supported system-wide
+        # path on Linux. Some distro builds also read
+        # <install dir>/distribution/policies.json (e.g. /usr/lib64/firefox/
+        # distribution/ on RHEL/Fedora); we write only the /etc path. See README.
+        - file: policies/browsers/firefox/policies.json
+          dest: /etc/firefox/policies/policies.json
+          appliesTo: [native]
+

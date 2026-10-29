@@ -1,0 +1,13 @@
+{
+  "BrowserSignin": 0,
+  "BraveRewardsDisabled": true,
+  "BraveWalletDisabled": true,
+  "BraveVPNDisabled": true,
+  "BraveAIChatEnabled": false,
+  "BraveNewsDisabled": true,
+  "BraveTalkDisabled": true,
+  "BraveP3AEnabled": false,
+  "BraveStatsPingEnabled": false,
+  "BraveWebDiscoveryEnabled": false,
+  "TorDisabled": true
+}

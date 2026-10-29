@@ -1,0 +1,22 @@
+{
+  "BrowserSignin": 1,
+  "RestrictSigninToPattern": ".*@{{ m365_tenant_domain }}",
+
+  "HideFirstRunExperience": true,
+  "DiagnosticData": 0,
+  "PersonalizationReportingEnabled": false,
+  "ShowRecommendationsEnabled": false,
+  "EdgeShoppingAssistantEnabled": false,
+  "EdgeCollectionsEnabled": false,
+  "EdgeFollowEnabled": false,
+  "ShowMicrosoftRewards": false,
+  "NewTabPageContentEnabled": false,
+  "HubsSidebarEnabled": false,
+
+  "SmartScreenEnabled": true,
+  "SmartScreenPuaEnabled": true,
+  "PreventSmartScreenPromptOverride": true,
+  "PreventSmartScreenPromptOverrideForFiles": true,
+
+  "AutomaticHttpsDefault": 2
+}

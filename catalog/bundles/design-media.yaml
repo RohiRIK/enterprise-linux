@@ -1,0 +1,51 @@
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: design-media
+  version: 2026.10.0
+  owner: it-platform
+  description: Open-source creative apps (graphics, vector, painting, video, recording) as Flatpaks.
+spec:
+  removable: true
+  includes: [core]
+  apps:
+    - id: gimp
+      name: GIMP
+      category: graphics
+      license: GPL-3.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Plug-ins can run arbitrary code; Flatpak sandbox limits filesystem access.
+      install:
+        flatpak: { ref: org.gimp.GIMP, remote: curated }
+    - id: inkscape
+      name: Inkscape
+      category: graphics
+      license: GPL-3.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low.
+      install:
+        flatpak: { ref: org.inkscape.Inkscape, remote: curated }
+    - id: krita
+      name: Krita
+      category: graphics
+      license: GPL-3.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low.
+      install:
+        flatpak: { ref: org.kde.krita, remote: curated }
+    - id: kdenlive
+      name: Kdenlive
+      category: video
+      license: GPL-3.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low.
+      install:
+        flatpak: { ref: org.kde.kdenlive, remote: curated }
+    - id: obs-studio
+      name: OBS Studio
+      category: video
+      license: GPL-2.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Screen capture through the portal (user approves each session); streaming keys are user secrets.
+      install:
+        flatpak: { ref: com.obsproject.Studio, remote: curated }

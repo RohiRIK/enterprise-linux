@@ -1,0 +1,15 @@
+# ONLYOFFICE vendor package repository (Desktop Editors).
+# Not used yet: office-oss installs ONLYOFFICE from Flatpak until the signing
+# key fingerprint below is verified out-of-band and filled in. The installer
+# must refuse a repo whose fingerprint is not a real 40-hex value.
+# URLs are from ONLYOFFICE's published install instructions; verify before use.
+apiVersion: enterprise-linux/v1
+kind: VendorRepo
+metadata: { name: onlyoffice, owner: it-platform }
+spec:
+  key:
+    url: https://download.onlyoffice.com/GPG-KEY-ONLYOFFICE   # verify
+    fingerprint: TODO-verify   # do not invent; fetch key, check against vendor docs, paste here
+  apt:    { uri: https://download.onlyoffice.com/repo/debian, suite: squeeze, components: [main] }   # "squeeze" is the vendor's fixed suite name, not the Debian release
+  dnf:    { baseurl: https://download.onlyoffice.com/repo/centos/main/noarch/ }
+  zypper: { baseurl: https://download.onlyoffice.com/repo/centos/main/noarch/ }   # verify: vendor does not document openSUSE

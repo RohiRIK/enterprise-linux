@@ -1,0 +1,19 @@
+# Brave Browser vendor repo. Design stage: not yet mirrored or tested.
+# OPTIONAL bundle app (see catalog/bundles/browsers.yaml, id: brave).
+#
+# The signing-key fingerprint is NOT filled in: we have not verified it from
+# an authoritative source. Per catalog rules no repo is added until it is.
+# To fill: download the key over HTTPS from brave.com's install docs, run
+# `gpg --show-keys --with-fingerprint <key>`, and compare against a second
+# channel (Brave's docs / security contact).
+apiVersion: enterprise-linux/v1
+kind: VendorRepo
+metadata: { name: brave, owner: it-platform }
+spec:
+  key:
+    # apt ships this binary keyring; rpm hosts use brave-core.asc on the rpm repo host  # verify both are the same key
+    url: https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+    fingerprint: TODO-verify
+  apt:    { uri: https://brave-browser-apt-release.s3.brave.com, suite: stable, components: [main] }
+  dnf:    { baseurl: https://brave-browser-rpm-release.s3.brave.com/x86_64 }   # verify ($basearch path)
+  zypper: { baseurl: https://brave-browser-rpm-release.s3.brave.com/x86_64 }   # verify
