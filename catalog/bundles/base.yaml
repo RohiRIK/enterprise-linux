@@ -1,0 +1,91 @@
+# Base: daily-work utilities. Assumes a GNOME desktop (docs/DESKTOP-UX.md
+# recommends GNOME; docs/ARCHITECTURE.md §8 question 11 is still open).
+# The browser lives in its own bundle (browsers.yaml) so orgs can pick which ones ship.
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: base
+  version: 2026.10.0
+  owner: it-platform
+  description: Daily-work utilities - PDF and image viewers, archives, calculator, text editor, scanner.
+spec:
+  removable: true
+  includes: [core]
+  apps:
+    - id: evince
+      name: Document Viewer (PDF)
+      category: pdf
+      license: GPL-2.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Parses untrusted documents; Flatpak build is sandboxed if the org prefers flatpak.
+      provides: [pdf]
+      desktopFile: { native: org.gnome.Evince.desktop, flatpak: org.gnome.Evince.desktop }
+      install:
+        apt:     { packages: [evince] }
+        dnf:     { packages: [evince] }
+        zypper:  { packages: [evince] }
+        flatpak: { ref: org.gnome.Evince, remote: curated }
+
+    - id: loupe
+      name: Image Viewer
+      category: image
+      license: GPL-3.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Parses untrusted images; image decoding is sandboxed by the app (glycin).
+      provides: [image]
+      desktopFile: org.gnome.Loupe.desktop
+      install:
+        apt:     { packages: [loupe] }   # verify: Ubuntu 24.04 universe / Debian 13
+        dnf:     { packages: [loupe] }
+        zypper:  { packages: [loupe] }
+        flatpak: { ref: org.gnome.Loupe, remote: curated }
+
+    - id: file-roller
+      name: Archive Manager
+      category: archive
+      license: GPL-2.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Extracts untrusted archives into the user's home.
+      provides: [archive]
+      desktopFile: org.gnome.FileRoller.desktop
+      install:
+        apt:     { packages: [file-roller, 7zip] }   # verify: 7zip on Ubuntu 24.04+, p7zip-full before
+        dnf:     { packages: [file-roller, p7zip] }
+        zypper:  { packages: [file-roller, 7zip] }
+        flatpak: { ref: org.gnome.FileRoller, remote: curated }
+
+    - id: gnome-calculator
+      name: Calculator
+      category: utility
+      license: GPL-3.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low. Currency conversion fetches rates online; harmless.
+      install:
+        apt:     { packages: [gnome-calculator] }
+        dnf:     { packages: [gnome-calculator] }
+        zypper:  { packages: [gnome-calculator] }
+        flatpak: { ref: org.gnome.Calculator, remote: curated }
+
+    - id: gnome-text-editor
+      name: Text Editor
+      category: utility
+      license: GPL-3.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low.
+      install:
+        apt:     { packages: [gnome-text-editor] }
+        dnf:     { packages: [gnome-text-editor] }
+        zypper:  { packages: [gnome-text-editor] }
+        flatpak: { ref: org.gnome.TextEditor, remote: curated }
+
+    - id: simple-scan
+      name: Document Scanner
+      category: utility
+      license: GPL-3.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low. Native package preferred so SANE drivers for office scanners work.
+      install:
+        apt:     { packages: [simple-scan, sane-utils] }
+        dnf:     { packages: [simple-scan, sane-backends] }
+        zypper:  { packages: [simple-scan, sane-backends] }
+        flatpak: { ref: org.gnome.SimpleScan, remote: curated }

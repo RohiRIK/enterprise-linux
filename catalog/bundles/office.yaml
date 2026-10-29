@@ -1,0 +1,21 @@
+# Meta bundle: switch on "office" and get both office options.
+# Orgs that want only one side enable office-microsoft365 or office-oss
+# directly instead of this bundle. Which app opens .docx/.xlsx/.pptx is the
+# profile's `defaults.office` (e.g. libreoffice or onlyoffice-desktopeditors);
+# the M365 PWAs do not register as file handlers.
+# Status: design-stage manifest. Nothing here has been tested.
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: office
+  version: 2026.10.0
+  owner: it-platform
+  description: >-
+    Office productivity, both options: Microsoft 365 web apps pinned as PWAs
+    (office-microsoft365) and open-source LibreOffice / ONLYOFFICE /
+    Thunderbird / Evolution (office-oss). Orgs can pick either sub-bundle
+    instead, or both.
+spec:
+  removable: true
+  includes: [office-microsoft365, office-oss]
+  apps: []

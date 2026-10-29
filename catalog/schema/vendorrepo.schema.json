@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RohiRIK/enterprise-linux/catalog/schema/vendorrepo.schema.json",
+  "title": "VendorRepo",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "enterprise-linux/v1"
+    },
+    "kind": {
+      "const": "VendorRepo"
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "name",
+        "owner"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": [
+        "key"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "object",
+          "required": [
+            "url",
+            "fingerprint"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "pattern": "^https://"
+            },
+            "fingerprint": {
+              "type": "string",
+              "pattern": "^([0-9A-F]{40}|TODO-verify)$"
+            }
+          }
+        },
+        "apt": {
+          "type": "object",
+          "required": [
+            "uri",
+            "suite"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string",
+              "pattern": "^https://"
+            },
+            "suite": {
+              "type": "string"
+            },
+            "components": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "architectures": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "dnf": {
+          "type": "object",
+          "required": [
+            "baseurl"
+          ],
+          "properties": {
+            "baseurl": {
+              "type": "string",
+              "pattern": "^https://"
+            }
+          }
+        },
+        "zypper": {
+          "type": "object",
+          "required": [
+            "baseurl"
+          ],
+          "properties": {
+            "baseurl": {
+              "type": "string",
+              "pattern": "^https://"
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

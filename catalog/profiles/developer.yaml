@@ -1,0 +1,21 @@
+# Developer profile for the power-user role (docs/PERMISSIONS.md).
+apiVersion: enterprise-linux/v1
+kind: BundleProfile
+metadata:
+  name: developer
+  description: Default profile plus dev tools and meeting/chat clients.
+spec:
+  prefer: [native, flatpak, pwa]
+  # browsers-extra (Chromium, Brave) is opt-in: Brave's repo key is not verified yet.
+  bundles: [core, base, browsers, office, collaboration, dev, accessibility, locale-he]
+  defaults:
+    browser: microsoft-edge
+    office: libreoffice
+    mail: thunderbird
+    pdf: evince
+    image: loupe
+    archive: file-roller
+  settings:
+    homepage: https://www.office.com/
+    m365_tenant_domain: ""
+    auth_server_allowlist: ""

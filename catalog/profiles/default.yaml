@@ -1,0 +1,22 @@
+# Default profile: what a standard knowledge-worker device gets.
+# Both office options, three managed browsers, Edge as the default browser
+# (needed for Microsoft 365 sign-in and the M365 web apps), LibreOffice for files.
+apiVersion: enterprise-linux/v1
+kind: BundleProfile
+metadata:
+  name: default
+  description: Standard knowledge worker - Microsoft 365 web apps plus LibreOffice, Edge / Chrome / Firefox ESR.
+spec:
+  prefer: [native, flatpak, pwa]
+  bundles: [core, base, browsers, office, accessibility, locale-he]
+  defaults:
+    browser: microsoft-edge
+    office: libreoffice
+    mail: thunderbird
+    pdf: evince
+    image: loupe
+    archive: file-roller
+  settings:
+    homepage: https://www.office.com/
+    m365_tenant_domain: ""        # e.g. contoso.com - restricts Edge sign-in to the org tenant
+    auth_server_allowlist: ""     # e.g. *.corp.contoso.com - Kerberos/SPNEGO servers

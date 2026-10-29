@@ -1,0 +1,20 @@
+# Mozilla's own APT repository (packages.mozilla.org). Design stage: not yet
+# mirrored or tested. Used for firefox-esr on apt-family systems (Ubuntu has no
+# firefox-esr deb in its archive; Debian does, but one source for both is simpler).
+# Fingerprint as published in Mozilla's install instructions.
+apiVersion: enterprise-linux/v1
+kind: VendorRepo
+metadata: { name: mozilla, owner: it-platform }
+spec:
+  key:
+    url: https://packages.mozilla.org/apt/repo-signing-key.gpg
+    fingerprint: 35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
+  apt: { uri: https://packages.mozilla.org/apt, suite: mozilla, components: [main] }
+  # No dnf / zypper entry: on RPM families Firefox comes from the distro
+  # (RHEL AppStream `firefox` = ESR, openSUSE `MozillaFirefox`). Mozilla has
+  # discussed an RPM repo on packages.mozilla.org; not used here.  # verify
+  #
+  # Mozilla recommends an APT pin (Pin: origin packages.mozilla.org,
+  # Pin-Priority: 1000) so its packages win over distro ones. For the package
+  # we install (firefox-esr) Ubuntu has no competing deb, so no pin is needed;
+  # add one if `firefox` from this repo is ever used.

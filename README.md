@@ -49,7 +49,7 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 - [`docs/MDM.md`](docs/MDM.md) — target story + hooks (**no live claim**)
 - [`docs/HARDENING.md`](docs/HARDENING.md) — layered security mechanisms + locked updates (design)
 - [`docs/IMAGE-PIPELINE.md`](docs/IMAGE-PIPELINE.md) — stub
-- [`docs/CURATED-APPS.md`](docs/CURATED-APPS.md) — selectable app bundles (design)
+- [`docs/CURATED-APPS.md`](docs/CURATED-APPS.md) — selectable app bundles; first build in [`catalog/`](catalog/README.md) (browsers with enterprise policies, Microsoft 365 + open-source office)
 - [`docs/MARKETPLACE.md`](docs/MARKETPLACE.md) — concept stub (**not live**)
 - [`docs/AI-RESEARCH.md`](docs/AI-RESEARCH.md) — AI-for-investigation research stub (**no ship claim**)
 - [`docs/FEATURE-IDEAS.md`](docs/FEATURE-IDEAS.md) — ideas-only concept backlog (**not shipped**)
