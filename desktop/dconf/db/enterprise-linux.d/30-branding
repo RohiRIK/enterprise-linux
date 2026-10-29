@@ -1,0 +1,14 @@
+# Tier: ORG DEFAULT (branding). The user may pick another wallpaper.
+# Orgs replace the image files under /usr/share/backgrounds/enterprise-linux/
+# rather than editing paths here.
+
+[org/gnome/desktop/background]
+picture-uri='file:///usr/share/backgrounds/enterprise-linux/wallpaper-light.svg'
+picture-uri-dark='file:///usr/share/backgrounds/enterprise-linux/wallpaper-dark.svg'
+picture-options='zoom'
+primary-color='@BRAND_COLOR@'
+
+[org/gnome/desktop/screensaver]
+picture-uri='file:///usr/share/backgrounds/enterprise-linux/wallpaper-dark.svg'
+picture-options='zoom'
+primary-color='@BRAND_COLOR@'

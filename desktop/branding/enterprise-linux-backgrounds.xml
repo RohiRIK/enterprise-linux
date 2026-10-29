@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE wallpapers SYSTEM "gnome-wp-list.dtd">
+<!-- Makes the org wallpaper selectable in Settings > Appearance. -->
+<wallpapers>
+  <wallpaper deleted="false">
+    <name>Organization</name>
+    <filename>/usr/share/backgrounds/enterprise-linux/wallpaper-light.svg</filename>
+    <filename-dark>/usr/share/backgrounds/enterprise-linux/wallpaper-dark.svg</filename-dark>
+    <options>zoom</options>
+    <shade_type>solid</shade_type>
+    <pcolor>#1f3a5f</pcolor>
+    <scolor>#1f3a5f</scolor>
+  </wallpaper>
+</wallpapers>

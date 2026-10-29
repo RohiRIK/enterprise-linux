@@ -1,0 +1,12 @@
+# Tier: HIDDEN. Debug and experimental surfaces that make support
+# impossible. Locked so nobody can turn them on from the GUI or gsettings.
+
+[org/gnome/shell]
+development-tools=false
+
+[org/gnome/mutter]
+experimental-features=@as []
+
+# Users can always log out.
+[org/gnome/desktop/lockdown]
+disable-log-out=false

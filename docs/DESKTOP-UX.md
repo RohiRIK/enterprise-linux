@@ -1,6 +1,6 @@
 # Desktop UX: a daily-use GUI with tiered customization
 
-**Status:** design only — nothing built.  
+**Status:** design, with a first implementation in [`desktop/`](../desktop/README.md) (GNOME dconf tiers, branding, default apps, Workplace app skeleton). Not yet booted on a real image.  
 **Date:** 2026-10-28  
 **Related:** [CURATED-APPS.md](CURATED-APPS.md), [PERMISSIONS.md](PERMISSIONS.md), [CONTROL-API.md](CONTROL-API.md)
 
@@ -83,7 +83,16 @@ Notifications from IT (`desktop.send-notification`) appear as normal desktop not
 
 ---
 
-## 7. Open questions
+## 7. Implementation
+
+First cut lives in [`desktop/`](../desktop/README.md), GNOME only:
+
+- Tiers map to files in `desktop/dconf/db/enterprise-linux.d/` (`00-` locked, `10-`/`20-`/`30-` org default, `90-` hidden); a validator enforces that user-tier and accessibility keys are never locked.
+- Login screen branding in `desktop/dconf/db/gdm.d/`.
+- Two default-app profiles, **open-source** and **microsoft-365**, with Firefox ESR, Chrome, Edge and Chromium preinstalled and configured by managed policy ([`desktop/apps/`](../desktop/apps/README.md)).
+- The IT app skeleton, working name **Workplace**, in [`desktop/workplace/`](../desktop/workplace/README.md), on demo data until `eld` exists.
+
+## 8. Open questions
 
 1. GNOME (recommended) or KDE Plasma?
 2. Name of the IT app?
