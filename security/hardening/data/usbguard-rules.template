@@ -1,0 +1,39 @@
+# enterprise-linux -- USBGuard baseline rules (layer 8). GENERATED FILE.
+# Source: security/hardening/data/usbguard-rules.template
+# Rendered by el-usbguard-rules --storage @STORAGE_POLICY@
+#
+# Evaluation is first-match. "equals { ... }" requires the device's whole
+# interface set to match, so composite devices that hide e.g. a mass-storage
+# or network interface behind a keyboard ("BadUSB") do NOT match an allow rule
+# and fall through to the implicit block.
+#
+# Known trade-off: any device that presents itself purely as a keyboard is
+# allowed (keystroke-injection tools included). Mitigation later: user
+# approval prompts for new HID devices via eld + usbguard-notifier.
+
+# --- Removable storage policy: @STORAGE_POLICY@ ---
+@STORAGE_RULES@
+
+# --- Always allowed classes ---
+# Hubs
+allow with-interface equals { 09:*:* }
+# Keyboards, mice, touchpads, FIDO2/U2F security keys (HID)
+allow with-interface equals { 03:*:* }
+# Smartcard readers and YubiKey-style HID+CCID composites (PIV login)
+allow with-interface equals { 0b:*:* }
+allow with-interface equals { 03:*:* 0b:*:* }
+# Audio (headsets: audio + HID volume buttons)
+allow with-interface equals { 01:*:* }
+allow with-interface equals { 01:*:* 03:*:* }
+# Video (webcams, often with a microphone)
+allow with-interface equals { 0e:*:* }
+allow with-interface equals { 0e:*:* 01:*:* }
+# Printers
+allow with-interface equals { 07:*:* }
+# Bluetooth controllers (wireless controller class)
+allow with-interface equals { e0:*:* }
+# USB network adapters (CDC ECM/NCM) used by docks and dongles
+allow with-interface equals { 02:*:* 0a:*:* }
+
+# --- Explicitly allowed devices (docks etc.) from policy ---
+@ALLOW_IDS@

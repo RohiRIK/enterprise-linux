@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# el-crypto-erase - remote wipe by destroying every LUKS2 keyslot.
+#
+# Implements docs/ENCRYPTION.md §2 "Wipe" and the CONTROL-API.md rule that
+# destructive actions need a signed confirmation token, not just local root.
+#
+# Safety gates (all required to actually erase):
+#   1. a detached signature over the token file that verifies against a
+#      pinned public key (default /etc/el/keys/crypto-erase.pub.pem)
+#   2. token claims: action=device.crypto-erase, this machine-id, the
+#      volume's LUKS UUID (or "*"), unexpired, lifetime <= 1h, unused nonce
+#   3. --execute  (default is a dry run that only prints the plan)
+#   4. --yes
+#
+# After the erase the data is unrecoverable, BUT while a volume is still
+# open the kernel holds its volume key in memory: reboot or power off right
+# away (--reboot / --poweroff).
+#
+# UNTESTED ON REAL HARDWARE. Exercised only with mocks and loop devices.
+set -euo pipefail
+
+_self="$(readlink -f "$0")"
+if [ -z "${EL_LIBDIR:-}" ]; then
+    if [ -f "$(dirname "$_self")/../lib/el-common.sh" ]; then
+        EL_LIBDIR="$(cd "$(dirname "$_self")/../lib" && pwd)"
+    else
+        EL_LIBDIR=/usr/lib/el/encryption
+    fi
+fi
+# shellcheck source=../lib/el-common.sh
+. "$EL_LIBDIR/el-common.sh"
+
+usage() {
+    cat <<'EOF'
+Usage: el-crypto-erase --token FILE --signature FILE [--device DEV ... | --all]
+                       [--pubkey PEM] [--execute --yes] [--reboot | --poweroff] [--json]
+
+Token (JSON, signed by the MDM / Control API key):
+  {"action":"device.crypto-erase","machine_id":"<contents of /etc/machine-id>",
+   "luks_uuids":["<uuid>"|"*"],"nonce":"<>=16 random chars>",
+   "issued_at":"2026-10-28T10:00:00Z","expires_at":"2026-10-28T10:30:00Z"}
+
+Signature: detached, over the exact token bytes.
+  RSA/ECDSA: openssl dgst -sha256 -sign key.pem -out token.sig token.json
+  Ed25519:   openssl pkeyutl -sign -inkey key.pem -rawin -in token.json -out token.sig
+
+Without --execute nothing is changed (dry run).
+EOF
+}
+
+TOKEN="" SIG="" PUBKEY="" DEVICES=() ALL=0 EXECUTE=0 YES=0 AFTER="" JSON=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --token) TOKEN="$2"; shift 2 ;;
+        --signature) SIG="$2"; shift 2 ;;
+        --pubkey) PUBKEY="$2"; shift 2 ;;
+        --device) DEVICES+=("$2"); shift 2 ;;
+        --all) ALL=1; shift ;;
+        --execute) EXECUTE=1; shift ;;
+        --dry-run) EXECUTE=0; shift ;;
+        --yes) YES=1; shift ;;
+        --reboot) AFTER=reboot; shift ;;
+        --poweroff) AFTER=poweroff; shift ;;
+        --json) JSON=1; shift ;;
+        -q|--quiet) EL_QUIET=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; el_die "unknown argument: $1" 64 ;;
+    esac
+done
+
+el_load_config
+PUBKEY="${PUBKEY:-${EL_ERASE_PUBKEY:-/etc/el/keys/crypto-erase.pub.pem}}"
+[ -n "$TOKEN" ] && [ -n "$SIG" ] || { usage >&2; el_die "--token and --signature are required" 64; }
+[ -r "$TOKEN" ] || el_die "cannot read token: $TOKEN" 66
+[ -r "$SIG" ] || el_die "cannot read signature: $SIG" 66
+[ -r "$PUBKEY" ] || el_die "pinned public key not found: $PUBKEY" 66
+if [ "$ALL" = 1 ] && [ "${#DEVICES[@]}" -gt 0 ]; then el_die "use either --device or --all" 64; fi
+[ "$ALL" = 1 ] || [ "${#DEVICES[@]}" -gt 0 ] || el_die "name volumes with --device or --all" 64
+
+el_require_root
+el_require_cmd openssl cryptsetup python3
+
+# ---- 1. signature -------------------------------------------------------
+verify_signature() {
+    local kt
+    kt="$(openssl pkey -pubin -in "$PUBKEY" -noout -text 2>/dev/null | head -n1 || true)"
+    case "$kt" in
+        *ED25519*|*ED448*)
+            openssl pkeyutl -verify -pubin -inkey "$PUBKEY" -rawin -in "$TOKEN" -sigfile "$SIG" >/dev/null 2>&1 ;;
+        "")
+            return 1 ;;
+        *)
+            openssl dgst -sha256 -verify "$PUBKEY" -signature "$SIG" "$TOKEN" >/dev/null 2>&1 ;;
+    esac
+}
+if ! verify_signature; then
+    el_audit "crypto-erase REJECTED: bad signature (token $TOKEN)"
+    el_die "signature verification FAILED against $PUBKEY; nothing erased" 77
+fi
+el_log "signature OK ($PUBKEY)"
+
+# ---- 2. devices + claims --------------------------------------------------
+if [ "$ALL" = 1 ]; then
+    el_require_cmd lsblk
+    mapfile -t DEVICES < <(el_discover_luks)
+    [ "${#DEVICES[@]}" -gt 0 ] || el_die "no LUKS devices found" 66
+fi
+UUIDS=()
+for d in "${DEVICES[@]}"; do
+    cryptsetup isLuks "$d" >/dev/null 2>&1 || el_die "$d is not a LUKS device" 65
+    UUIDS+=("$(el_luks_uuid "$d")")
+done
+MACHINE_ID="$(tr -d '[:space:]' <"$EL_MACHINE_ID_FILE" 2>/dev/null || true)"
+[ -n "$MACHINE_ID" ] || el_die "cannot read machine id from $EL_MACHINE_ID_FILE" 66
+NONCE_DB="$EL_STATE_DIR/erase-nonces"
+
+if ! NONCE="$(el_py erase-check --token "$TOKEN" --machine-id "$MACHINE_ID" \
+        --uuids "$(el_join , "${UUIDS[@]}")" --nonce-db "$NONCE_DB")"; then
+    el_audit "crypto-erase REJECTED: token claims invalid"
+    el_die "token claims rejected; nothing erased" 77
+fi
+
+# ---- 3. plan / execute ----------------------------------------------------
+el_log "token accepted for: ${DEVICES[*]}"
+if [ "$EXECUTE" = 0 ]; then
+    EL_DRY_RUN=1
+    el_log "DRY RUN (default). Re-run with --execute --yes to destroy all keyslots."
+elif [ "$YES" = 0 ]; then
+    el_die "--execute also needs --yes" 64
+fi
+
+[ "$EL_DRY_RUN" = 1 ] || el_py erase-record-nonce --nonce-db "$NONCE_DB" --nonce "$NONCE"
+if [ "$EL_DRY_RUN" = 1 ]; then phase="dry-run"; else phase="EXECUTING"; fi
+el_audit "crypto-erase $phase for LUKS ${UUIDS[*]} nonce $NONCE"
+
+RESULTS=()
+for i in "${!DEVICES[@]}"; do
+    d="${DEVICES[$i]}"
+    el_run cryptsetup luksErase -q "$d"
+    remaining="unknown"
+    if [ "$EL_DRY_RUN" = 0 ]; then
+        tmp="$(mktemp)"
+        if cryptsetup luksDump --dump-json-metadata "$d" >"$tmp" 2>/dev/null; then
+            remaining="$(el_py luks-query "$tmp" slot-count)"
+        fi
+        rm -f "$tmp"
+        [ "$remaining" = 0 ] || el_warn "$d: $remaining keyslot(s) still present after luksErase"
+        el_audit "crypto-erase done on $d (LUKS ${UUIDS[$i]}), remaining keyslots: $remaining"
+    fi
+    RESULTS+=("{\"device\":\"$d\",\"luks_uuid\":\"${UUIDS[$i]}\",\"dry_run\":$([ "$EL_DRY_RUN" = 1 ] && echo true || echo false),\"remaining_keyslots\":\"$remaining\"}")
+done
+
+# Escrowed recovery keys for these volumes are now useless; drop their local
+# metadata (the copies in the escrow backend are the MDM's to retire).
+if [ "$EL_DRY_RUN" = 0 ] && [ -f "$EL_STATE_DIR/escrow.json" ]; then
+    for u in "${UUIDS[@]}"; do
+        el_py escrow-forget --state "$EL_STATE_DIR/escrow.json" --uuid "$u"
+    done
+fi
+
+if [ "$JSON" = 1 ]; then
+    printf '%s\n' "${RESULTS[@]}" | python3 -c 'import json,sys;print(json.dumps([json.loads(l) for l in sys.stdin if l.strip()],indent=2))'
+fi
+
+if [ -n "$AFTER" ]; then
+    el_run systemctl "$AFTER" --force
+elif [ "$EL_DRY_RUN" = 0 ]; then
+    el_warn "open volumes keep their key in RAM until reboot; reboot or power off now"
+fi

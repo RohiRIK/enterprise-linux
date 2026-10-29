@@ -1,0 +1,12 @@
+## enterprise-linux audit baseline -- time changes (layer 13)
+## Ref: audit_rules_time_adjtimex / _settimeofday / _clock_settime / _stime / _watch_localtime
+
+-a always,exit -F arch=b64 -S adjtimex,settimeofday -k el_time_change
+-a always,exit -F arch=b32 -S adjtimex,settimeofday,stime -k el_time_change
+## CLOCK_REALTIME only (a0=0)
+-a always,exit -F arch=b64 -S clock_settime -F a0=0x0 -k el_time_change
+-a always,exit -F arch=b32 -S clock_settime -F a0=0x0 -k el_time_change
+-w /etc/localtime -p wa -k el_time_change
+-w /etc/chrony.conf -p wa -k el_time_change
+-w /etc/chrony/ -p wa -k el_time_change
+-w /etc/systemd/timesyncd.conf -p wa -k el_time_change

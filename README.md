@@ -59,6 +59,10 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 - [`docs/ENCRYPTION.md`](docs/ENCRYPTION.md) — LUKS2 + TPM2 + escrow (design)
 - [`docs/DESKTOP-UX.md`](docs/DESKTOP-UX.md) — daily GUI with tiered customization (design)
 
+## Code
+
+- [`security/`](security/README.md) — first implementation of encryption (LUKS2 + TPM2 + escrow), permissions (roles, JIT admin, break-glass) and the hardening baseline. Container-tested only; not hardware-tested.
+
 ## License
 
 [MIT](LICENSE)

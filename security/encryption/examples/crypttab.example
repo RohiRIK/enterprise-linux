@@ -1,0 +1,25 @@
+# /etc/crypttab examples for enterprise-linux (see security/encryption/README.md).
+# <name>   <device>                                     <key>  <options>
+#
+# Laptop root, TPM2 (+PIN chosen at enrollment; the PIN flag lives in the LUKS
+# token, crypttab only says "try the TPM"). Needs a dracut or systemd-based
+# initrd for the root volume (RHEL 9/10, Ubuntu >= 25.10 default; NOT the
+# initramfs-tools cryptroot hook of Ubuntu 24.04).
+luks-root   UUID=0b9f6c1e-1111-4222-8333-944455556666    none   luks,discard,tpm2-device=auto
+#
+# Signed PCR policy (UKI): systemd-cryptsetup reads the signature from
+# /run/systemd/tpm2-pcr-signature.json (placed by systemd-stub) by default;
+# an explicit path is only needed if you store it elsewhere.
+#luks-root  UUID=...                                     none   luks,discard,tpm2-device=auto,tpm2-signature=/run/systemd/tpm2-pcr-signature.json
+#
+# FIDO2 security key
+#luks-data  UUID=...                                     none   luks,fido2-device=auto
+#
+# Office desktop, data volume unlocked via Tang (Clevis). Root volumes are
+# handled by clevis-dracut / clevis-initramfs instead and need no crypttab
+# option; non-root volumes need _netdev so they wait for the network.
+#luks-data  UUID=...                                     none   luks,_netdev
+#
+# Swap: keep it inside the encrypted root (LV or swapfile) or use zram.
+# A random-key swap breaks hibernation, which is off by policy anyway.
+#swap       /dev/disk/by-partlabel/swap                  /dev/urandom swap,cipher=aes-xts-plain64,size=512

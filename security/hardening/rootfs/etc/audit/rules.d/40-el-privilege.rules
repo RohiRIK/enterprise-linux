@@ -1,0 +1,38 @@
+## enterprise-linux audit baseline -- privilege use (layer 13, PERMISSIONS.md §6)
+## Setuid/setgid binaries found on the system at apply time are added by
+## el-harden-apply as 41-el-setuid.rules (generated, key el_priv_setuid).
+
+## sudo policy (the JIT drop-in directory /etc/sudoers.d is watched in 80-el.rules)
+## Ref: audit_rules_sysadmin_actions
+-w /etc/sudoers -p wa -k el_priv_scope
+-w /etc/sudo.conf -p wa -k el_priv_scope
+-w /etc/sudo-rs/ -p wa -k el_priv_scope
+
+## sudo log, if configured with a logfile
+-w /var/log/sudo.log -p wa -k el_priv_actions
+
+## Execution of privilege tools by real (logged-in) users
+## Ref: audit_rules_privileged_commands_sudo / _su / _pkexec ...
+-a always,exit -F path=/usr/bin/sudo -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_sudo
+-a always,exit -F path=/usr/bin/sudo-rs -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_sudo
+-a always,exit -F path=/usr/lib/cargo/bin/sudo -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_sudo
+-a always,exit -F path=/usr/bin/su -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_su
+-a always,exit -F path=/usr/lib/cargo/bin/su -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_su
+-a always,exit -F path=/usr/bin/pkexec -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_polkit
+-a always,exit -F path=/usr/bin/passwd -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_passwd
+-a always,exit -F path=/usr/bin/chage -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_passwd
+-a always,exit -F path=/usr/bin/gpasswd -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_passwd
+-a always,exit -F path=/usr/bin/newgrp -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_passwd
+-a always,exit -F path=/usr/bin/chsh -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_passwd
+-a always,exit -F path=/usr/sbin/usermod -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_usermod
+-a always,exit -F path=/usr/bin/crontab -F perm=x -F auid>=1000 -F auid!=unset -k el_priv_cron
+
+## Any execution where the effective uid became 0 but the real uid did not
+## (setuid escalation, sudo, su). "user_emulation" in CIS terms.
+## Ref: audit_rules_suid_privilege_function
+-a always,exit -F arch=b64 -S execve -C uid!=euid -F euid=0 -k el_priv_escalation
+-a always,exit -F arch=b32 -S execve -C uid!=euid -F euid=0 -k el_priv_escalation
+
+## polkit policy (GUI admin prompts and Control API authorization)
+-w /etc/polkit-1/ -p wa -k el_polkit_config
+-w /usr/share/polkit-1/ -p wa -k el_polkit_config

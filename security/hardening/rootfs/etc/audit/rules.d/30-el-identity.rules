@@ -1,0 +1,41 @@
+## enterprise-linux audit baseline -- identity, authentication, session (layer 13)
+
+## Local account databases
+## Ref: audit_rules_usergroup_modification_*
+-w /etc/passwd -p wa -k el_identity
+-w /etc/group -p wa -k el_identity
+-w /etc/shadow -p wa -k el_identity
+-w /etc/gshadow -p wa -k el_identity
+-w /etc/security/opasswd -p wa -k el_identity
+-w /etc/subuid -p wa -k el_identity
+-w /etc/subgid -p wa -k el_identity
+
+## Authentication stack configuration (PAM, NSS, SSSD / authd / Himmelblau)
+-w /etc/pam.d/ -p wa -k el_auth_config
+-w /etc/security/ -p wa -k el_auth_config
+-w /etc/nsswitch.conf -p wa -k el_auth_config
+-w /etc/sssd/ -p wa -k el_auth_config
+-w /etc/authd/ -p wa -k el_auth_config
+-w /etc/krb5.conf -p wa -k el_auth_config
+-w /etc/login.defs -p wa -k el_auth_config
+
+## Hostname / network identity
+## Ref: audit_rules_networkconfig_modification
+-a always,exit -F arch=b64 -S sethostname,setdomainname -k el_system_locale
+-a always,exit -F arch=b32 -S sethostname,setdomainname -k el_system_locale
+-w /etc/hosts -p wa -k el_system_locale
+-w /etc/hostname -p wa -k el_system_locale
+-w /etc/issue -p wa -k el_system_locale
+-w /etc/issue.net -p wa -k el_system_locale
+-w /etc/NetworkManager/ -p wa -k el_system_locale
+
+## Login records
+## Ref: audit_rules_login_events_*
+-w /var/log/lastlog -p wa -k el_logins
+-w /var/run/faillock/ -p wa -k el_logins
+
+## Session records
+## Ref: audit_rules_session_events
+-w /var/run/utmp -p wa -k el_session
+-w /var/log/wtmp -p wa -k el_session
+-w /var/log/btmp -p wa -k el_session

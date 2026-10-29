@@ -1,0 +1,7 @@
+# enterprise-linux -- EDR / MDM agent slot (layer 14, CONTROL-API.md §5).
+# Agents install under /opt/el-agents/<vendor>/ via a signed package; we trust
+# the package database (rpm backend) for their files, so no path-wide allow is
+# needed here. This file only documents the slot and gives agents with
+# self-updating binaries (outside RPM) a place for a vendor-specific rule,
+# reviewed per vendor. Example (keep disabled until reviewed):
+# allow perm=execute all : dir=/opt/el-agents/vendor-x/ trust=1

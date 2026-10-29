@@ -1,0 +1,22 @@
+[Unit]
+Description=enterprise-linux: expire just-in-time elevation grants
+Documentation=file:///usr/share/doc/el/permissions/README.md
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/el-jit expire
+# Hardening: needs to write /etc/sudoers.d, /etc/polkit-1/rules.d, /var/lib/el/roles
+ProtectSystem=strict
+ReadWritePaths=/etc/sudoers.d /etc/polkit-1/rules.d /var/lib/el/roles
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

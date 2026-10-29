@@ -1,0 +1,104 @@
+## <summary>enterprise-linux control daemon (eld)</summary>
+
+########################################
+## <summary>
+##	Connect to eld over the Control API unix stream socket.
+## </summary>
+## <param name="domain">
+##	<summary>Domain allowed access.</summary>
+## </param>
+#
+interface(`eld_stream_connect',`
+	gen_require(`
+		type eld_t, eld_var_run_t, eld_api_sock_t;
+	')
+
+	files_search_pids($1)
+	search_dirs_pattern($1, eld_var_run_t, eld_var_run_t)
+	stream_connect_pattern($1, eld_var_run_t, eld_api_sock_t, eld_t)
+')
+
+########################################
+## <summary>
+##	Send and receive messages from eld over D-Bus.
+## </summary>
+## <param name="domain">
+##	<summary>Domain allowed access.</summary>
+## </param>
+#
+interface(`eld_dbus_chat',`
+	gen_require(`
+		type eld_t;
+		class dbus send_msg;
+	')
+
+	allow $1 eld_t:dbus send_msg;
+	allow eld_t $1:dbus send_msg;
+')
+
+########################################
+## <summary>
+##	Read eld configuration (/etc/el).
+## </summary>
+## <param name="domain">
+##	<summary>Domain allowed access.</summary>
+## </param>
+#
+interface(`eld_read_config',`
+	gen_require(`
+		type eld_etc_t;
+	')
+
+	files_search_etc($1)
+	read_files_pattern($1, eld_etc_t, eld_etc_t)
+')
+
+########################################
+## <summary>
+##	Execute eld in the eld domain (for systemd-less test harnesses).
+## </summary>
+## <param name="domain">
+##	<summary>Domain allowed to transition.</summary>
+## </param>
+#
+interface(`eld_domtrans',`
+	gen_require(`
+		type eld_t, eld_exec_t;
+	')
+
+	corecmd_search_bin($1)
+	domtrans_pattern($1, eld_exec_t, eld_t)
+')
+
+########################################
+## <summary>
+##	All of the rules required to administrate an eld environment
+##	(e.g. for staff_u -> sysadm_r local admins).
+## </summary>
+## <param name="domain">
+##	<summary>Domain allowed access.</summary>
+## </param>
+## <param name="role">
+##	<summary>Role allowed access.</summary>
+## </param>
+#
+interface(`eld_admin',`
+	gen_require(`
+		type eld_t, eld_etc_t, eld_var_lib_t, eld_var_run_t, eld_unit_file_t;
+	')
+
+	allow $1 eld_t:process { ptrace signal_perms };
+	ps_process_pattern($1, eld_t)
+
+	files_search_etc($1)
+	admin_pattern($1, eld_etc_t)
+
+	files_search_var_lib($1)
+	admin_pattern($1, eld_var_lib_t)
+
+	files_search_pids($1)
+	admin_pattern($1, eld_var_run_t)
+
+	admin_pattern($1, eld_unit_file_t)
+	allow $1 eld_unit_file_t:service all_service_perms;
+')

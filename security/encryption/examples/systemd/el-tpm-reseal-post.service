@@ -1,0 +1,17 @@
+# First boot after a firmware / boot-chain update: finish a re-seal that
+# `el-tpm-reseal pre-update` prepared (confirm the predicted slot or re-seal
+# a bridge slot to the new measurements). Runs only when work is pending.
+[Unit]
+Description=Finish TPM2 re-seal after a boot-chain update
+After=local-fs.target
+ConditionPathExists=/var/lib/el/encryption/reseal.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/el-tpm-reseal post-update --unlock-tpm2
+UMask=0077
+NoNewPrivileges=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

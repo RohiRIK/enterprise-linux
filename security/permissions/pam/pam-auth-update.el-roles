@@ -1,0 +1,10 @@
+Name: enterprise-linux role-based login access (pam_access) and JIT/break-glass hooks
+Default: no
+Priority: 64
+Account-Type: Additional
+Account:
+	required	pam_access.so accessfile=/etc/security/el-access.conf
+Session-Type: Additional
+Session:
+	optional	pam_exec.so quiet /usr/libexec/el/el-breakglass-session-open
+	optional	pam_exec.so quiet /usr/libexec/el/el-jit-session-close

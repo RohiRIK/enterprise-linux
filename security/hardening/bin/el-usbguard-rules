@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""el-usbguard-rules -- render USBGuard baseline rules for a removable-media policy.
+
+Layer 8 of docs/HARDENING.md; policy values from docs/ENCRYPTION.md
+("media.removable": block | read-only | allow).
+
+  block      USB mass storage and MTP/PTP devices are blocked by USBGuard.
+  read-only  storage is authorized by USBGuard, and a udev rule marks USB
+             block devices read-only (blockdev --setro) before udisks mounts
+             them. Defence in depth only: root can flip it back.
+  allow      storage authorized; udisks still mounts nosuid,nodev,noexec.
+
+("allow-encrypted-only" from ENCRYPTION.md needs content inspection that
+USBGuard cannot do; it is left for eld/udisks integration later.)
+
+Writes:
+  <root>/etc/usbguard/rules.d/50-el-baseline.conf
+  <root>/etc/udev/rules.d/90-el-usb-storage-ro.rules   (read-only only;
+                                                         removed otherwise)
+Prints a JSON summary of written/removed files on stdout.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_TEMPLATE = os.path.join(HERE, "..", "data", "usbguard-rules.template")
+
+RULES_REL = "etc/usbguard/rules.d/50-el-baseline.conf"
+UDEV_REL = "etc/udev/rules.d/90-el-usb-storage-ro.rules"
+
+STORAGE_RULES = {
+    "block": (
+        "# Mass storage (08) and still-image/MTP (06) are blocked explicitly,\n"
+        "# including composites that contain such an interface.\n"
+        "block with-interface one-of { 08:*:* 06:*:* }"
+    ),
+    "read-only": (
+        "# Storage authorized; made read-only by udev rule 90-el-usb-storage-ro.rules.\n"
+        "# MTP phones (06) stay blocked: MTP is file-level and cannot be forced read-only.\n"
+        "block with-interface one-of { 06:*:* }\n"
+        "allow with-interface equals { 08:*:* }"
+    ),
+    "allow": (
+        "# Storage and MTP authorized (udisks mounts nosuid,nodev,noexec).\n"
+        "allow with-interface equals { 08:*:* }\n"
+        "allow with-interface equals { 06:*:* }"
+    ),
+}
+
+UDEV_RO = """\
+# enterprise-linux -- removable media policy "read-only" (layer 8). GENERATED.
+# Marks USB block devices (disk and partitions) read-only as they appear,
+# before udisks2 can mount them. Internal SD readers (mmc bus) are not covered.
+ACTION=="add|change", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", RUN+="/usr/sbin/blockdev --setro /dev/%k"
+"""
+
+ID_RE = re.compile(r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$")
+
+
+def render(template, policy, allow_ids):
+    lines = []
+    for dev in allow_ids:
+        if not ID_RE.match(dev):
+            raise ValueError("invalid USB id (want vvvv:pppp): %r" % dev)
+        lines.append("allow id %s" % dev.lower())
+    out = template.replace("@STORAGE_POLICY@", policy)
+    out = out.replace("@STORAGE_RULES@", STORAGE_RULES[policy])
+    out = out.replace("@ALLOW_IDS@", "\n".join(lines) if lines else "# (none)")
+    return out
+
+
+def write_if_changed(path, content, mode, dry_run):
+    old = None
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            old = fh.read()
+    if old == content:
+        return "unchanged"
+    if not dry_run:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".el-tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    return "installed" if old is None else "updated"
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--storage", choices=sorted(STORAGE_RULES), default="block")
+    ap.add_argument("--allow-id", action="append", default=[],
+                    help="vendor:product to allow explicitly (repeatable), e.g. 17ef:30b4 for a dock")
+    ap.add_argument("--root", default="/")
+    ap.add_argument("--template", default=DEFAULT_TEMPLATE)
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--stdout", action="store_true", help="print the rules instead of writing")
+    args = ap.parse_args(argv)
+
+    with open(args.template, encoding="utf-8") as fh:
+        template = fh.read()
+    try:
+        rules = render(template, args.storage, args.allow_id)
+    except ValueError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return 2
+    if args.stdout:
+        sys.stdout.write(rules)
+        return 0
+
+    result = {"storage": args.storage, "files": []}
+    rules_path = os.path.join(args.root, RULES_REL)
+    result["files"].append({"path": "/" + RULES_REL,
+                            "action": write_if_changed(rules_path, rules, 0o600, args.dry_run)})
+    udev_path = os.path.join(args.root, UDEV_REL)
+    if args.storage == "read-only":
+        result["files"].append({"path": "/" + UDEV_REL,
+                                "action": write_if_changed(udev_path, UDEV_RO, 0o644, args.dry_run)})
+    elif os.path.exists(udev_path):
+        if not args.dry_run:
+            os.remove(udev_path)
+        result["files"].append({"path": "/" + UDEV_REL, "action": "removed"})
+    json.dump(result, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,45 @@
+# Install manifest: which rootfs/ file belongs to which HARDENING.md layer and
+# when it is installed. Consumed by bin/el-harden-apply; tests assert that it
+# lists exactly the files under rootfs/.
+#
+# columns: path (relative to rootfs/)  layer  when  mode
+#   layer: mac allowlist device network kernel sandbox memsafe audit session
+#   when : any | debian | rhel | apparmor | selinux | fapolicyd | nftables |
+#          firewalld | ufw ; "a+b" = all of them must hold
+etc/sysctl.d/90-el-hardening.conf	kernel	any	0644
+etc/modprobe.d/90-el-blacklist.conf	kernel	any	0644
+etc/audit/rules.d/10-el-base.rules	audit	any	0640
+etc/audit/rules.d/30-el-identity.rules	audit	any	0640
+etc/audit/rules.d/40-el-privilege.rules	audit	any	0640
+etc/audit/rules.d/45-el-access.rules	audit	any	0640
+etc/audit/rules.d/50-el-mac-policy.rules	audit	any	0640
+etc/audit/rules.d/60-el-modules.rules	audit	any	0640
+etc/audit/rules.d/70-el-time.rules	audit	any	0640
+etc/audit/rules.d/80-el.rules	audit	any	0640
+etc/audit/rules.d/99-el-finalize.rules	audit	any	0640
+etc/systemd/journald.conf.d/90-el.conf	audit	any	0644
+etc/aide/aide.conf.d/90_el_paths	audit	debian	0644
+etc/apparmor.d/usr.libexec.eld	mac	apparmor	0644
+etc/fapolicyd/rules.d/15-el-agent-slot.rules	allowlist	fapolicyd	0644
+etc/fapolicyd/rules.d/25-el-flatpak.rules	allowlist	fapolicyd	0644
+etc/fapolicyd/rules.d/35-el-writable-dirs.rules	allowlist	fapolicyd	0644
+etc/systemd/system/tmp.mount.d/50-el-options.conf	allowlist	any	0644
+etc/udisks2/mount_options.conf	allowlist	any	0644
+etc/dconf/db/local.d/01-el-media	allowlist	any	0644
+etc/usbguard/usbguard-daemon.conf	device	any	0600
+etc/polkit-1/rules.d/60-el-udisks.rules	device	any	0644
+etc/nftables/el-baseline.nft	network	nftables	0644
+etc/nftables.conf	network	nftables+debian	0755
+etc/firewalld/zones/el-workstation.xml	network	firewalld	0644
+etc/NetworkManager/conf.d/90-el-mdns.conf	network	any	0644
+etc/systemd/resolved.conf.d/90-el.conf	network	any	0644
+etc/systemd/system/eld.service.d/50-el-sandbox.conf	sandbox	any	0644
+etc/systemd/coredump.conf.d/90-el.conf	sandbox	any	0644
+etc/security/limits.d/90-el-nocore.conf	sandbox	any	0644
+etc/dconf/db/local.d/00-el-screensaver	session	any	0644
+etc/dconf/db/local.d/locks/00-el-screensaver	session	any	0644
+etc/dconf/db/gdm.d/00-el-login-screen	session	any	0644
+etc/dconf/db/gdm.d/locks/00-el-login-screen	session	any	0644
+etc/lightdm/lightdm.conf.d/90-el.conf	session	any	0644
+etc/systemd/logind.conf.d/90-el.conf	session	any	0644
+etc/security/pwquality.conf.d/90-el.conf	session	any	0644

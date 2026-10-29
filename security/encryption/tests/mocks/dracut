@@ -1,0 +1,3 @@
+#!/usr/bin/env python3
+import _mocklib as m
+m.log_call("dracut")

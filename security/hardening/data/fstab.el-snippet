@@ -1,0 +1,9 @@
+# Managed by el-harden-apply (layer 7). Lines below are rendered between the
+# "# BEGIN el-hardening" / "# END el-hardening" markers in /etc/fstab.
+# @HOME@ lines are emitted only when --home-noexec resolves to yes.
+# A path that already has its own fstab entry is skipped (edit that entry's
+# options by hand; apply prints a warning).
+tmpfs      /tmp      tmpfs  defaults,mode=1777,nosuid,nodev,noexec,size=50%,nr_inodes=1m  0 0
+tmpfs      /dev/shm  tmpfs  defaults,nosuid,nodev,noexec                                    0 0
+/var/tmp   /var/tmp  none   bind,nosuid,nodev,noexec                                         0 0
+@HOME@/home /home    none   bind,nosuid,nodev,noexec                                         0 0

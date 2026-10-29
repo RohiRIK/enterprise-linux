@@ -1,0 +1,11 @@
+# enterprise-linux -- explicit deny for execution from user-writable locations
+# (layer 7). Defence in depth: untrusted files there would be denied by the
+# distro's 90-deny-execute anyway; this gives the SIEM a clearer, earlier
+# "deny_audit" with a stable rule position. Shared objects are covered too
+# (blocks LD_PRELOAD from /tmp).
+deny_audit perm=execute all : dir=/tmp/
+deny_audit perm=execute all : dir=/var/tmp/
+deny_audit perm=execute all : dir=/dev/shm/
+deny_audit perm=execute all : dir=/home/
+deny_audit perm=execute all : dir=/run/media/
+deny_audit perm=execute all : dir=/media/

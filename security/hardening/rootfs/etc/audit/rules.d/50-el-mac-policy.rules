@@ -1,0 +1,32 @@
+## enterprise-linux audit baseline -- security policy changes (layers 6-9, 13)
+## Watches on paths that do not exist on this distro family are ignored (-i).
+
+## Mandatory access control
+## Ref: audit_rules_mac_modification
+-w /etc/selinux/ -p wa -k el_mac_policy
+-w /usr/share/selinux/ -p wa -k el_mac_policy
+-w /etc/apparmor/ -p wa -k el_mac_policy
+-w /etc/apparmor.d/ -p wa -k el_mac_policy
+
+## SELinux context / ACL tools
+## Ref: audit_rules_execution_chcon / _setfacl / _chacl / _semanage / _setsebool
+-a always,exit -F path=/usr/bin/chcon -F perm=x -F auid>=1000 -F auid!=unset -k el_perm_chng
+-a always,exit -F path=/usr/bin/setfacl -F perm=x -F auid>=1000 -F auid!=unset -k el_perm_chng
+-a always,exit -F path=/usr/bin/chacl -F perm=x -F auid>=1000 -F auid!=unset -k el_perm_chng
+-a always,exit -F path=/usr/sbin/semanage -F perm=x -F auid>=1000 -F auid!=unset -k el_perm_chng
+-a always,exit -F path=/usr/sbin/setsebool -F perm=x -F auid>=1000 -F auid!=unset -k el_perm_chng
+-a always,exit -F path=/usr/sbin/setenforce -F perm=x -F auid>=1000 -F auid!=unset -k el_perm_chng
+
+## Application allowlisting (layer 7)
+-w /etc/fapolicyd/ -p wa -k el_allowlist_policy
+
+## Device control (layer 8)
+-w /etc/usbguard/ -p wa -k el_device_policy
+-w /etc/udisks2/ -p wa -k el_device_policy
+
+## Host firewall (layer 9)
+-w /etc/firewalld/ -p wa -k el_firewall_policy
+-w /etc/nftables.conf -p wa -k el_firewall_policy
+-w /etc/nftables/ -p wa -k el_firewall_policy
+-w /etc/sysconfig/nftables.conf -p wa -k el_firewall_policy
+-w /etc/ufw/ -p wa -k el_firewall_policy

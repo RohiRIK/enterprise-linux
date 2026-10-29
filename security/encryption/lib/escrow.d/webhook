@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# escrow.d/webhook - generic HTTPS POST to an MDM / Control API endpoint.
+#
+# Config:
+#   EL_WEBHOOK_URL          https://mdm.example.com/api/escrow      (required)
+#   EL_WEBHOOK_TOKEN_FILE   bearer token file (optional)
+#   EL_WEBHOOK_CLIENT_CERT  client certificate for mTLS (optional)
+#   EL_WEBHOOK_CLIENT_KEY   client key for mTLS (optional)
+#   EL_WEBHOOK_CACERT       CA bundle / pinned CA (optional)
+#   EL_WEBHOOK_VERIFY_URL   GET endpoint for `verify`; "{uuid}" is substituted (optional)
+#
+# Contract: POST body {"type":"luks-recovery-key","recovery_key":...,
+# "metadata":{luks_uuid,keyslot,hostname,machine_id,fingerprint_sha256}}.
+# The server must answer 2xx with JSON that echoes "fingerprint_sha256"
+# (proves it parsed and stored this key) and may return "reference".
+# `verify` expects {"fingerprint_sha256": "..."} from EL_WEBHOOK_VERIFY_URL.
+set -euo pipefail
+: "${EL_LIBDIR:?}"
+EL_PROG="escrow.d/webhook"
+# shellcheck source=../el-common.sh
+. "$EL_LIBDIR/el-common.sh"
+
+: "${EL_ESCROW_WORK:?}" "${EL_ESCROW_UUID:?}"
+W="$EL_ESCROW_WORK"
+args=()
+if [ -n "${EL_WEBHOOK_TOKEN_FILE:-}" ]; then
+    el_make_header "$W/wh.hdr" "Authorization" "$EL_WEBHOOK_TOKEN_FILE" "Bearer "
+    args+=(-H "@$W/wh.hdr")
+fi
+[ -n "${EL_WEBHOOK_CLIENT_CERT:-}" ] && args+=(--cert "$EL_WEBHOOK_CLIENT_CERT")
+[ -n "${EL_WEBHOOK_CLIENT_KEY:-}" ] && args+=(--key "$EL_WEBHOOK_CLIENT_KEY")
+[ -n "${EL_WEBHOOK_CACERT:-}" ] && args+=(--cacert "$EL_WEBHOOK_CACERT")
+trap 'el_shred "$W/wh.hdr" "$W/wh.body" "$W/wh.resp"' EXIT
+
+case "${1:-}" in
+    escrow)
+        : "${EL_WEBHOOK_URL:?EL_WEBHOOK_URL not set}" "${EL_ESCROW_KEY_FILE:?}"
+        rm -f "$W/wh.body"
+        el_py escrow-body --format webhook --key-file "$EL_ESCROW_KEY_FILE" --out "$W/wh.body" \
+            --meta "luks_uuid=$EL_ESCROW_UUID" --meta "keyslot=${EL_ESCROW_KEYSLOT:-}" \
+            --meta "hostname=${EL_ESCROW_HOSTNAME:-}" --meta "machine_id=${EL_ESCROW_MACHINE_ID:-}" \
+            --meta "fingerprint_sha256=${EL_ESCROW_FINGERPRINT:-}"
+        code="$(el_curl "$W/wh.resp" "${args[@]}" -X POST -H "Content-Type: application/json" \
+            --data-binary "@$W/wh.body" "$EL_WEBHOOK_URL")" || el_die "webhook request failed" 75
+        el_http_ok "$code" || el_die "webhook returned HTTP $code" 75
+        echoed="$(el_py json-get "$W/wh.resp" fingerprint_sha256 2>/dev/null || true)"
+        [ "$echoed" = "$EL_ESCROW_FINGERPRINT" ] \
+            || el_die "webhook did not acknowledge the key fingerprint" 75
+        ref="$(el_py json-get "$W/wh.resp" reference 2>/dev/null || echo "$EL_WEBHOOK_URL")"
+        echo "webhook:$ref" ;;
+    verify)
+        [ -n "${EL_WEBHOOK_VERIFY_URL:-}" ] || exit 3
+        url="${EL_WEBHOOK_VERIFY_URL//\{uuid\}/$EL_ESCROW_UUID}"
+        code="$(el_curl "$W/wh.resp" "${args[@]}" "$url")" || exit 1
+        el_http_ok "$code" || exit 1
+        [ "$(el_py json-get "$W/wh.resp" fingerprint_sha256 2>/dev/null || true)" = "$EL_ESCROW_FINGERPRINT" ] ;;
+    *) echo "usage: webhook escrow|verify" >&2; exit 64 ;;
+esac

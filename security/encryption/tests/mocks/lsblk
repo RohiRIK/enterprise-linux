@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+import json, os, sys, _mocklib as m
+m.log_call("lsblk")
+with open(os.environ["MOCK_LSBLK_JSON"]) as fh:
+    tree = json.load(fh)
+if "--json" in sys.argv:
+    print(json.dumps(tree)); sys.exit(0)
+def walk(ns):
+    for n in ns or []:
+        yield n
+        yield from walk(n.get("children"))
+for n in walk(tree["blockdevices"]):
+    print(n.get("path") or n["name"], n.get("type") or "part", n.get("fstype") or "")

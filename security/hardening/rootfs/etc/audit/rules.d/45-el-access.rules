@@ -1,0 +1,22 @@
+## enterprise-linux audit baseline -- permission changes and access failures (layer 13)
+
+## Discretionary access control changes by real users
+## Ref: audit_rules_dac_modification_*
+-a always,exit -F arch=b64 -S chmod,fchmod,fchmodat -F auid>=1000 -F auid!=unset -k el_perm_mod
+-a always,exit -F arch=b32 -S chmod,fchmod,fchmodat -F auid>=1000 -F auid!=unset -k el_perm_mod
+-a always,exit -F arch=b64 -S chown,fchown,lchown,fchownat -F auid>=1000 -F auid!=unset -k el_perm_mod
+-a always,exit -F arch=b32 -S chown,fchown,lchown,fchownat -F auid>=1000 -F auid!=unset -k el_perm_mod
+-a always,exit -F arch=b64 -S setxattr,lsetxattr,fsetxattr,removexattr,lremovexattr,fremovexattr -F auid>=1000 -F auid!=unset -k el_perm_mod
+-a always,exit -F arch=b32 -S setxattr,lsetxattr,fsetxattr,removexattr,lremovexattr,fremovexattr -F auid>=1000 -F auid!=unset -k el_perm_mod
+
+## Unsuccessful file access attempts
+## Ref: audit_rules_unsuccessful_file_modification_*
+-a always,exit -F arch=b64 -S open,openat,creat,truncate,ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=unset -k el_access
+-a always,exit -F arch=b64 -S open,openat,creat,truncate,ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=unset -k el_access
+-a always,exit -F arch=b32 -S open,openat,creat,truncate,ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=unset -k el_access
+-a always,exit -F arch=b32 -S open,openat,creat,truncate,ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=unset -k el_access
+
+## Mounts by real users (removable media, layer 8)
+## Ref: audit_rules_media_export
+-a always,exit -F arch=b64 -S mount -F auid>=1000 -F auid!=unset -k el_mounts
+-a always,exit -F arch=b32 -S mount -F auid>=1000 -F auid!=unset -k el_mounts

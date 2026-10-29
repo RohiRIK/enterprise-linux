@@ -1,0 +1,16 @@
+#!/bin/bash
+# pam_exec hook: emit breakglass.used (crit) and schedule rotation when the
+# break-glass account opens a session (console login, su, sudo -u, ...).
+# Install as /usr/libexec/el/el-breakglass-session-open and add:
+#   session optional pam_exec.so quiet /usr/libexec/el/el-breakglass-session-open
+# The account name is read by el-breakglass from /etc/el/roles/breakglass.json.
+set -u
+case "${PAM_TYPE:-}" in
+  open_session) ;;
+  *) exit 0 ;;
+esac
+[ -n "${PAM_USER:-}" ] || exit 0
+# Fixed path on purpose: never take the binary from the (user-influenced) PAM environment.
+EL_BREAKGLASS=/usr/bin/el-breakglass
+"$EL_BREAKGLASS" pam-hook >/dev/null 2>&1 || true
+exit 0

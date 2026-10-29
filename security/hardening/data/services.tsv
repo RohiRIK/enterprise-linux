@@ -1,0 +1,40 @@
+# Service policy consumed by bin/el-harden-apply.
+# columns: unit  action  layer  when  profiles  reason
+#   action  : enable | disable | mask
+#             mask    -> symlinked to /dev/null even if not installed (cannot
+#                        be started by a later package install either)
+#             disable -> only if the unit exists
+#             enable  -> only if the unit exists
+#   when    : same vocabulary as files.tsv
+#   profiles: all | workstation | developer
+# Live system: systemctl --now. Offline --root: /dev/null symlinks for mask,
+# removal of *.wants links for disable, and a systemd preset file
+# (etc/systemd/system-preset/40-el-hardening.preset) for enable/disable.
+ssh.service	mask	network	any	all	SSH server off by default (HARDENING.md §1 layer 9)
+ssh.socket	mask	network	any	all	Ubuntu 24.04+ socket-activates sshd
+sshd.service	mask	network	any	all	SSH server off by default (RHEL naming)
+sshd.socket	mask	network	any	all	SSH server off by default
+telnet.socket	mask	network	any	all	cleartext remote login
+rsh.socket	mask	network	any	all	cleartext remote login
+rlogin.socket	mask	network	any	all	cleartext remote login
+rpcbind.service	mask	network	any	all	NFS server helper; NFS client mounts use v4 without rpcbind
+rpcbind.socket	mask	network	any	all	NFS server helper
+nfs-server.service	mask	network	any	all	no file serving from laptops
+smbd.service	disable	network	any	all	no file serving from laptops
+nmbd.service	disable	network	any	all	NetBIOS name service
+vsftpd.service	disable	network	any	all	no FTP server
+snmpd.service	disable	network	any	all	no SNMP agent
+cockpit.socket	disable	network	rhel	all	web console listener (RHEL)
+avahi-daemon.service	disable	network	any	all	mDNS off on untrusted networks (trade-off: printer discovery)
+avahi-daemon.socket	disable	network	any	all	mDNS off on untrusted networks
+cups-browsed.service	disable	network	any	all	remote printer auto-discovery (CVE-2024-47176 class)
+whoopsie.service	disable	network	debian	all	crash upload to a third party
+kerneloops.service	disable	network	debian	all	crash upload to a third party
+ufw.service	disable	network	nftables+debian	all	nftables backend selected; avoid two firewall managers
+nftables.service	enable	network	nftables	all	host firewall
+firewalld.service	enable	network	firewalld	all	host firewall
+ufw.service	enable	network	ufw	all	host firewall (ufw backend)
+auditd.service	enable	audit	any	all	audit trail
+usbguard.service	enable	device	any	all	USB device control
+fapolicyd.service	enable	allowlist	fapolicyd	all	application allowlisting (permissive in developer profile)
+apparmor.service	enable	mac	apparmor	all	mandatory access control

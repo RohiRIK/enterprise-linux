@@ -1,0 +1,77 @@
+#!/bin/bash
+# el-selinux-confined-users -- map directory users/admins to SELinux confined
+# users on RHEL-family hosts (layer 6, PERMISSIONS.md §3 "MAC" row).
+#
+#   __default__ (every directory user)   -> user_u   (no sudo/su, no setuid
+#                                                     transitions, cannot run
+#                                                     content from $HOME/tmp
+#                                                     when user_exec_content=off)
+#   local-admin group (e.g. %IT-Linux-Admins) -> staff_u, sudo transitions to
+#                                                sysadm_r:sysadm_t
+#
+# NOT run automatically by el-harden-apply: the admin group name is
+# org-specific and comes from policy (roles.local-admin). Default mode is a
+# dry run that prints the commands.
+#
+# Trade-offs (verify on the target RHEL minor release before enabling):
+#  * user_u cannot use sudo at all -- JIT elevation (PERMISSIONS.md §4) must
+#    move the user to staff_u for the grant window, or go through eld.
+#  * Graphical sessions for confined users are supported on recent RHEL 9/10
+#    minors but third-party apps (EDR GUIs, VPN clients) may hit denials.
+#  * user_exec_content=off is the SELinux-native equivalent of noexec $HOME.
+#
+# Usage: el-selinux-confined-users [--apply] [--admin-group NAME]
+#                                  [--power-user-group NAME]
+set -euo pipefail
+
+apply=0
+admin_group="IT-Linux-Admins"
+power_group=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --apply) apply=1 ;;
+        --admin-group) admin_group="$2"; shift ;;
+        --power-user-group) power_group="$2"; shift ;;
+        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+run() {
+    if [[ $apply -eq 1 ]]; then
+        echo "+ $*"
+        "$@"
+    else
+        echo "[dry-run] $*"
+    fi
+}
+
+if [[ $apply -eq 1 ]]; then
+    command -v semanage >/dev/null || { echo "semanage not found (policycoreutils-python-utils)" >&2; exit 2; }
+    [[ "$(getenforce 2>/dev/null || echo Disabled)" != "Disabled" ]] || { echo "SELinux is disabled" >&2; exit 2; }
+fi
+
+# Everyone not mapped explicitly: user_u
+run semanage login -m -s user_u -r s0 __default__
+
+# Admins: staff_u with full MCS range (can transition to sysadm_r via sudo)
+run semanage login -a -s staff_u -r s0-s0:c0.c1023 "%${admin_group}"
+
+# Power users (developers): staff_u without sysadm transitions keeps
+# rootless containers and user_exec_content working.
+if [[ -n "$power_group" ]]; then
+    run semanage login -a -s staff_u -r s0 "%${power_group}"
+fi
+
+# Booleans
+run setsebool -P user_exec_content off   # user_t may not exec from $HOME,/tmp
+run setsebool -P ssh_sysadm_login off    # no direct sysadm login over ssh
+run setsebool -P deny_ptrace off         # keep ptrace for staff debugging (Yama still applies)
+
+cat <<SUDO
+# Add to the sudo rule rendered for local admins (PERMISSIONS.md), e.g.
+# /etc/sudoers.d/50-el-local-admin :
+%${admin_group} ALL=(ALL) TYPE=sysadm_t ROLE=sysadm_r ALL
+SUDO

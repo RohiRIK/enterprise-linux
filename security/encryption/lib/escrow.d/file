@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# escrow.d/file - store the recovery key in a root-only directory.
+# FOR TESTING AND LABS ONLY: the key stays on the same disk it protects
+# (inside the encrypted root), which gives no recovery value if the volume
+# is locked. Use a remote backend in production.
+#
+# Config: EL_ESCROW_FILE_DIR (default $EL_STATE_DIR/escrow-files)
+set -euo pipefail
+: "${EL_LIBDIR:?}"
+EL_PROG="escrow.d/file"
+# shellcheck source=../el-common.sh
+. "$EL_LIBDIR/el-common.sh"
+
+DIR="${EL_ESCROW_FILE_DIR:-$EL_STATE_DIR/escrow-files}"
+
+case "${1:-}" in
+    escrow)
+        : "${EL_ESCROW_KEY_FILE:?}" "${EL_ESCROW_UUID:?}" "${EL_ESCROW_KEYSLOT:?}" "${EL_ESCROW_WORK:?}"
+        (umask 077; mkdir -p "$DIR")
+        chmod 0700 "$DIR"
+        out="$DIR/${EL_ESCROW_UUID}.json"
+        tmp="$DIR/.${EL_ESCROW_UUID}.tmp.$$"
+        rm -f "$tmp"
+        el_py escrow-body --format file --key-file "$EL_ESCROW_KEY_FILE" --out "$tmp" \
+            --meta "luks_uuid=$EL_ESCROW_UUID" --meta "keyslot=$EL_ESCROW_KEYSLOT" \
+            --meta "machine_id=${EL_ESCROW_MACHINE_ID:-}" --meta "hostname=${EL_ESCROW_HOSTNAME:-}"
+        sync "$tmp" 2>/dev/null || true
+        mv -f "$tmp" "$out"
+        # Read back and confirm before reporting success.
+        el_py verify-field "$out" recovery_key "$EL_ESCROW_FINGERPRINT" >/dev/null \
+            || el_die "read-back verification failed" 75
+        echo "file:$out" ;;
+    verify)
+        : "${EL_ESCROW_UUID:?}" "${EL_ESCROW_FINGERPRINT:?}"
+        out="${EL_ESCROW_TARGET#file:}"
+        [ -n "$out" ] || out="$DIR/${EL_ESCROW_UUID}.json"
+        el_py verify-field "$out" recovery_key "$EL_ESCROW_FINGERPRINT" >/dev/null ;;
+    *) echo "usage: file escrow|verify" >&2; exit 64 ;;
+esac

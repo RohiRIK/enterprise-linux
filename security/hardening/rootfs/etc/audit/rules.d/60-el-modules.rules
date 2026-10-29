@@ -1,0 +1,15 @@
+## enterprise-linux audit baseline -- kernel modules and kernel config (layer 10, 13)
+
+## Ref: audit_rules_kernel_module_loading_*
+-a always,exit -F arch=b64 -S init_module,finit_module -k el_modules
+-a always,exit -F arch=b64 -S delete_module -k el_modules
+-a always,exit -F arch=b32 -S init_module,finit_module -k el_modules
+-a always,exit -F arch=b32 -S delete_module -k el_modules
+-a always,exit -F path=/usr/bin/kmod -F perm=x -F auid>=1000 -F auid!=unset -k el_modules
+
+## Kernel tunables and module policy
+-w /etc/sysctl.conf -p wa -k el_kernel_config
+-w /etc/sysctl.d/ -p wa -k el_kernel_config
+-w /etc/modprobe.d/ -p wa -k el_kernel_config
+-w /etc/kernel/cmdline -p wa -k el_kernel_config
+-w /etc/default/grub -p wa -k el_kernel_config

@@ -1,0 +1,518 @@
+#!/usr/bin/env python3
+"""el-harden-verify -- check the live state of the enterprise-linux hardening baseline.
+
+Prints JSON: one record per check
+    {"id", "layer", "title", "status": "pass"|"fail"|"skip", "expected", "actual"}
+plus a summary. The document is shaped to be served as the `security` /
+`compliance` facts of the Control API (docs/CONTROL-API.md §3) once eld exists.
+
+This is a CIS/STIG-oriented self-check, NOT a certification or a replacement
+for an OpenSCAP scan (HARDENING.md layer 15). Not hardware-tested.
+
+  el-harden-verify [--root DIR] [--layer NAME ...] [--profile P] [--pretty]
+
+--root redirects file reads (/etc, /proc, /sys) for testing; commands are
+always looked up on PATH. Exit: 0 no failures, 1 at least one fail, 2 usage.
+"""
+import argparse
+import datetime
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+VERSION = "0.1.0"
+HERE = os.path.dirname(os.path.abspath(__file__))
+SCHEMA = "el.hardening.verify/v1"
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        return None
+
+
+def parse_os_release(text):
+    data = {}
+    for line in (text or "").splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            k, _, v = line.partition("=")
+            data[k.strip()] = v.strip().strip("\"'")
+    return data
+
+
+def detect_family(osr):
+    ids = [osr.get("ID", "").lower()] + osr.get("ID_LIKE", "").lower().split()
+    if any(i in ("debian", "ubuntu") for i in ids):
+        return "debian"
+    if any(i in ("rhel", "fedora", "centos", "rocky", "almalinux") for i in ids):
+        return "rhel"
+    return "unknown"
+
+
+def parse_sysctl_conf(text):
+    """Return [(key, value, optional)] from a sysctl.d file."""
+    out = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        optional = line.startswith("-")
+        if optional:
+            line = line[1:]
+        key, sep, val = line.partition("=")
+        if not sep:
+            continue
+        out.append((key.strip(), " ".join(val.split()), optional))
+    return out
+
+
+def ini_get(text, section, key):
+    cur = None
+    val = None
+    for line in (text or "").splitlines():
+        s = line.strip()
+        m = re.match(r"^\[(.+)\]$", s)
+        if m:
+            cur = m.group(1)
+            continue
+        if cur == section and "=" in s and not s.startswith("#"):
+            k, _, v = s.partition("=")
+            if k.strip() == key:
+                val = v.strip()
+    return val
+
+
+def kv_get(text, key):
+    val = None
+    for line in (text or "").splitlines():
+        s = line.strip()
+        if s.startswith("#") or "=" not in s:
+            continue
+        k, _, v = s.partition("=")
+        if k.strip() == key:
+            val = v.strip()
+    return val
+
+
+class Verifier:
+    def __init__(self, args):
+        self.args = args
+        self.root = os.path.abspath(args.root)
+        self.checks = []
+        osr_text = read_text(self.path("etc/os-release")) or read_text(self.path("usr/lib/os-release"))
+        self.osr = parse_os_release(osr_text)
+        self.family = detect_family(self.osr)
+        manifest = read_text(self.path("var/lib/el/hardening/applied.json"))
+        try:
+            self.manifest = json.loads(manifest) if manifest else {}
+        except ValueError:
+            self.manifest = {}
+        self.profile = args.profile or self.manifest.get("profile", "workstation")
+        self.firewall = self.manifest.get("firewall") or (
+            "firewalld" if self.family == "rhel" else "nftables")
+        self.skip_layers = set(self.manifest.get("layers_skipped", []))
+        src = os.path.normpath(os.path.join(HERE, "..", "rootfs"))
+        self.baseline = args.baseline or (src if os.path.isdir(src) else "/usr/share/el/hardening/rootfs")
+
+    # -- plumbing --------------------------------------------------------------
+
+    def path(self, rel):
+        return os.path.join(self.root, rel.lstrip("/"))
+
+    def baseline_file(self, rel):
+        """Expected content: the installed copy, else the shipped baseline."""
+        return read_text(self.path(rel)) or read_text(os.path.join(self.baseline, rel))
+
+    def cmd(self, argv):
+        """Run a command; return (rc, stdout) or (None, reason) if unavailable."""
+        if shutil.which(argv[0]) is None:
+            return None, "%s not found" % argv[0]
+        try:
+            p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               universal_newlines=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return None, str(exc)
+        return p.returncode, p.stdout.strip()
+
+    def add(self, cid, layer, title, status, expected, actual):
+        self.checks.append({"id": cid, "layer": layer, "title": title, "status": status,
+                            "expected": expected, "actual": actual})
+
+    def wanted(self, layer):
+        if self.args.layer and layer not in self.args.layer:
+            return False
+        return True
+
+    def unit_state(self, unit):
+        rc, out = self.cmd(["systemctl", "is-active", unit])
+        if rc is None:
+            return None
+        return out.splitlines()[0] if out else "unknown"
+
+    def service_check(self, cid, layer, title, unit, want_active):
+        st = self.unit_state(unit)
+        if st is None:
+            self.add(cid, layer, title, "skip", "active" if want_active else "inactive",
+                     "systemctl not found")
+            return
+        ok = (st == "active") if want_active else (st != "active")
+        self.add(cid, layer, title, "pass" if ok else "fail",
+                 "active" if want_active else "not active", st)
+
+    # -- layers ----------------------------------------------------------------
+
+    def check_boot(self):
+        layer = "boot"
+        rc, out = self.cmd(["mokutil", "--sb-state"])
+        if rc is not None:
+            on = "SecureBoot enabled" in out
+            self.add("boot.secure_boot", layer, "UEFI Secure Boot enabled",
+                     "pass" if on else "fail", "SecureBoot enabled", out.splitlines()[0] if out else "")
+        else:
+            rc, out = self.cmd(["bootctl", "status"])
+            m = re.search(r"Secure Boot:\s*(\S+)", out or "") if rc is not None else None
+            if m:
+                self.add("boot.secure_boot", layer, "UEFI Secure Boot enabled",
+                         "pass" if m.group(1) == "enabled" else "fail", "enabled", m.group(1))
+            else:
+                self.add("boot.secure_boot", layer, "UEFI Secure Boot enabled", "skip",
+                         "enabled", "mokutil/bootctl not available")
+        lock = read_text(self.path("sys/kernel/security/lockdown"))
+        if lock is None:
+            self.add("boot.lockdown", layer, "Kernel lockdown integrity or stronger", "skip",
+                     "[integrity] or [confidentiality]", "lockdown LSM not exposed")
+        else:
+            m = re.search(r"\[(\w+)\]", lock)
+            cur = m.group(1) if m else lock.strip()
+            self.add("boot.lockdown", layer, "Kernel lockdown integrity or stronger",
+                     "pass" if cur in ("integrity", "confidentiality") else "fail",
+                     "integrity|confidentiality", cur)
+
+    def check_kernel(self):
+        layer = "kernel"
+        conf = self.baseline_file("etc/sysctl.d/90-el-hardening.conf")
+        if conf is None:
+            self.add("kernel.sysctl", layer, "sysctl baseline present", "fail",
+                     "90-el-hardening.conf", "missing")
+            return
+        for key, val, optional in parse_sysctl_conf(conf):
+            cid = "kernel.sysctl.%s" % key
+            rc, out = self.cmd(["sysctl", "-n", key])
+            if rc is None:
+                self.add(cid, layer, "sysctl %s" % key, "skip", val, out)
+            elif rc != 0:
+                self.add(cid, layer, "sysctl %s" % key, "skip" if optional else "fail", val,
+                         "key not available on this kernel")
+            else:
+                actual = " ".join(out.split())
+                self.add(cid, layer, "sysctl %s" % key, "pass" if actual == val else "fail",
+                         val, actual)
+        sig = read_text(self.path("sys/module/module/parameters/sig_enforce"))
+        if sig is None:
+            self.add("kernel.module_sig_enforce", layer, "Module signatures enforced", "skip",
+                     "Y", "parameter not exposed")
+        else:
+            lock = read_text(self.path("sys/kernel/security/lockdown")) or ""
+            ok = sig.strip() == "Y" or "[integrity]" in lock or "[confidentiality]" in lock
+            self.add("kernel.module_sig_enforce", layer,
+                     "Module signatures enforced (sig_enforce or lockdown)",
+                     "pass" if ok else "fail", "Y", sig.strip())
+        blk = self.baseline_file("etc/modprobe.d/90-el-blacklist.conf") or ""
+        mods = re.findall(r"^install\s+(\S+)\s+/bin/false", blk, re.M)
+        loaded_text = read_text(self.path("proc/modules"))
+        if loaded_text is None:
+            self.add("kernel.blacklisted_modules", layer, "No blacklisted module loaded", "skip",
+                     "none loaded", "/proc/modules unreadable")
+        else:
+            loaded = {l.split()[0].replace("-", "_") for l in loaded_text.splitlines() if l.strip()}
+            bad = sorted(m for m in mods if m.replace("-", "_") in loaded)
+            self.add("kernel.blacklisted_modules", layer, "No blacklisted module loaded",
+                     "fail" if bad else "pass", "none loaded", ",".join(bad) or "none loaded")
+        present = read_text(self.path("etc/modprobe.d/90-el-blacklist.conf")) is not None
+        self.add("kernel.blacklist_config", layer, "Module blacklist installed",
+                 "pass" if present else "fail", "/etc/modprobe.d/90-el-blacklist.conf",
+                 "present" if present else "missing")
+
+    def check_mac(self):
+        layer = "mac"
+        if self.family == "debian":
+            rc, out = self.cmd(["aa-enabled"])
+            if rc is None:
+                profiles = read_text(self.path("sys/kernel/security/apparmor/profiles"))
+                status = "skip" if profiles is None else "pass"
+                self.add("mac.apparmor_enabled", layer, "AppArmor enabled", status, "Yes",
+                         "aa-enabled not found" if profiles is None else "profiles loaded")
+            else:
+                self.add("mac.apparmor_enabled", layer, "AppArmor enabled",
+                         "pass" if rc == 0 and out.startswith("Yes") else "fail", "Yes", out)
+            if not os.path.exists(self.path("usr/libexec/eld")):
+                self.add("mac.eld_confined", layer, "eld confined by AppArmor", "skip",
+                         "eld (enforce)", "eld not installed")
+            else:
+                prof = read_text(self.path("sys/kernel/security/apparmor/profiles")) or ""
+                ok = "eld (enforce)" in prof
+                self.add("mac.eld_confined", layer, "eld confined by AppArmor",
+                         "pass" if ok else "fail", "eld (enforce)",
+                         "loaded" if ok else "not loaded in enforce mode")
+        elif self.family == "rhel":
+            rc, out = self.cmd(["getenforce"])
+            if rc is None:
+                self.add("mac.selinux_enforcing", layer, "SELinux enforcing", "skip",
+                         "Enforcing", out)
+            else:
+                self.add("mac.selinux_enforcing", layer, "SELinux enforcing",
+                         "pass" if out == "Enforcing" else "fail", "Enforcing", out)
+            cfg = kv_get(read_text(self.path("etc/selinux/config")), "SELINUX")
+            self.add("mac.selinux_config", layer, "SELinux enforcing at boot (config)",
+                     "pass" if cfg == "enforcing" else "fail", "enforcing", cfg or "missing")
+        else:
+            self.add("mac.enabled", layer, "MAC enabled", "skip", "AppArmor or SELinux",
+                     "unknown distro family")
+
+    def check_allowlist(self):
+        layer = "allowlist"
+        mounts = read_text(self.path("proc/self/mounts"))
+        targets = ["/tmp", "/var/tmp", "/dev/shm"]
+        home_expected = self.manifest.get("home_noexec", self.profile == "workstation")
+        if home_expected:
+            targets.append("/home")
+        table = {}
+        for line in (mounts or "").splitlines():
+            parts = line.split()
+            if len(parts) >= 4:
+                table[parts[1]] = set(parts[3].split(","))
+        for mnt in targets:
+            cid = "allowlist.mount%s" % mnt.replace("/", ".")
+            want = {"nosuid", "nodev", "noexec"}
+            if mounts is None:
+                self.add(cid, layer, "%s mounted nosuid,nodev,noexec" % mnt, "skip",
+                         "nosuid,nodev,noexec", "mount table unreadable")
+            elif mnt not in table:
+                self.add(cid, layer, "%s mounted nosuid,nodev,noexec" % mnt, "fail",
+                         "nosuid,nodev,noexec", "not a separate mount")
+            else:
+                missing = sorted(want - table[mnt])
+                self.add(cid, layer, "%s mounted nosuid,nodev,noexec" % mnt,
+                         "fail" if missing else "pass", "nosuid,nodev,noexec",
+                         "missing: " + ",".join(missing) if missing else ",".join(sorted(want)))
+        if self.family == "rhel":
+            self.service_check("allowlist.fapolicyd_active", layer, "fapolicyd running",
+                               "fapolicyd", True)
+            want = "1" if self.profile == "developer" else "0"
+            got = kv_get(read_text(self.path("etc/fapolicyd/fapolicyd.conf")), "permissive")
+            self.add("allowlist.fapolicyd_mode", layer,
+                     "fapolicyd enforcing (workstation) / permissive (developer)",
+                     "pass" if got == want else "fail", "permissive = %s" % want,
+                     "permissive = %s" % got if got is not None else "fapolicyd.conf missing")
+
+    def check_device(self):
+        layer = "device"
+        self.service_check("device.usbguard_active", layer, "USBGuard running", "usbguard", True)
+        conf = read_text(self.path("etc/usbguard/usbguard-daemon.conf"))
+        tgt = kv_get(conf, "ImplicitPolicyTarget")
+        self.add("device.usbguard_default_block", layer, "USBGuard implicit policy is block",
+                 "pass" if tgt == "block" else "fail", "block", tgt or "config missing")
+        rules = os.path.exists(self.path("etc/usbguard/rules.d/50-el-baseline.conf"))
+        self.add("device.usbguard_rules", layer, "USBGuard baseline rules installed",
+                 "pass" if rules else "fail", "50-el-baseline.conf", "present" if rules else "missing")
+
+    def check_network(self):
+        layer = "network"
+        fw = self.firewall
+        if fw == "firewalld":
+            rc, out = self.cmd(["firewall-cmd", "--state"])
+            if rc is None:
+                self.add("network.firewall_active", layer, "Host firewall active", "skip",
+                         "running", out)
+            else:
+                self.add("network.firewall_active", layer, "Host firewall active",
+                         "pass" if rc == 0 and out == "running" else "fail", "running", out)
+                rc, zone = self.cmd(["firewall-cmd", "--get-default-zone"])
+                self.add("network.firewall_zone", layer, "Default zone is el-workstation",
+                         "pass" if zone == "el-workstation" else "fail", "el-workstation", zone)
+        elif fw == "nftables":
+            rc, out = self.cmd(["nft", "list", "table", "inet", "el_filter"])
+            if rc is None:
+                self.add("network.firewall_active", layer, "Host firewall active", "skip",
+                         "table inet el_filter loaded", out)
+            else:
+                ok = rc == 0 and "policy drop" in out
+                self.add("network.firewall_active", layer, "Host firewall active",
+                         "pass" if ok else "fail", "table inet el_filter with input policy drop",
+                         "loaded" if ok else "not loaded")
+        else:
+            rc, out = self.cmd(["ufw", "status"])
+            ok = rc == 0 and "Status: active" in (out or "")
+            self.add("network.firewall_active", layer, "Host firewall active",
+                     "skip" if rc is None else ("pass" if ok else "fail"), "Status: active",
+                     out.splitlines()[0] if out else "")
+        for unit in ("ssh.service", "ssh.socket", "sshd.service"):
+            self.service_check("network.%s_off" % unit.replace(".", "_"), layer,
+                               "SSH server not running (%s)" % unit, unit, False)
+        self.service_check("network.avahi_off", layer, "mDNS responder (avahi) not running",
+                           "avahi-daemon.service", False)
+        rc, out = self.cmd(["ss", "-H", "-t", "-l", "-n"])
+        if rc is None or rc != 0:
+            self.add("network.no_listeners", layer, "No TCP listeners on non-loopback addresses",
+                     "skip", "none", out if rc is None else "ss failed")
+        else:
+            exposed = []
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                local = parts[3]
+                addr = local.rsplit(":", 1)[0].strip("[]")
+                if addr.startswith("127.") or addr in ("::1",) or addr.endswith("%lo"):
+                    continue
+                exposed.append(local)
+            self.add("network.no_listeners", layer, "No TCP listeners on non-loopback addresses",
+                     "fail" if exposed else "pass", "none", ",".join(exposed) or "none")
+
+    def check_sandbox(self):
+        layer = "sandbox"
+        cd = read_text(self.path("etc/systemd/coredump.conf.d/90-el.conf"))
+        st = ini_get(cd, "Coredump", "Storage")
+        self.add("sandbox.coredump_disabled", layer, "systemd-coredump storage disabled",
+                 "pass" if st == "none" else "fail", "Storage=none", "Storage=%s" % st if st else "missing")
+        drop = os.path.exists(self.path("etc/systemd/system/eld.service.d/50-el-sandbox.conf"))
+        self.add("sandbox.eld_dropin", layer, "eld systemd sandbox drop-in installed",
+                 "pass" if drop else "fail", "present", "present" if drop else "missing")
+
+    def check_memsafe(self):
+        layer = "memsafe"
+        rc, out = self.cmd(["sudo", "--version"])
+        if rc is None:
+            self.add("memsafe.sudo_rs", layer, "sudo implementation (follow substrate)", "skip",
+                     "sudo-rs where the substrate ships it", out)
+        else:
+            first = out.splitlines()[0] if out else ""
+            is_rs = "sudo-rs" in first
+            self.add("memsafe.sudo_rs", layer, "sudo implementation (follow substrate)",
+                     "pass" if is_rs else "skip", "sudo-rs where the substrate ships it", first)
+
+    def check_audit(self):
+        layer = "audit"
+        self.service_check("audit.auditd_active", layer, "auditd running", "auditd", True)
+        rc, out = self.cmd(["auditctl", "-s"])
+        if rc is None:
+            self.add("audit.enabled", layer, "Kernel audit enabled", "skip", "enabled 1|2", out)
+            self.add("audit.rules_loaded", layer, "Baseline audit rules loaded", "skip",
+                     ">= baseline count", "auditctl not found")
+        else:
+            m = re.search(r"enabled\s+(\d)", out)
+            en = m.group(1) if m else "?"
+            self.add("audit.enabled", layer, "Kernel audit enabled",
+                     "pass" if en in ("1", "2") else "fail", "enabled 1|2", "enabled %s" % en)
+            expected = self.expected_rule_count()
+            rc, rules = self.cmd(["auditctl", "-l"])
+            lines = [l for l in (rules or "").splitlines() if l.startswith("-")]
+            # Allow slack: some watches are on paths absent on this family.
+            need = int(expected * 0.6)
+            el = sum(1 for l in lines if "el_" in l)
+            self.add("audit.rules_loaded", layer, "Baseline audit rules loaded",
+                     "pass" if el >= need else "fail", ">= %d el_* rules" % need, "%d" % el)
+        jd = read_text(self.path("etc/systemd/journald.conf.d/90-el.conf"))
+        seal = ini_get(jd, "Journal", "Seal")
+        storage = ini_get(jd, "Journal", "Storage")
+        self.add("audit.journald_persistent", layer, "journald persistent storage",
+                 "pass" if storage == "persistent" else "fail", "persistent", storage or "missing")
+        self.add("audit.journald_seal", layer, "journald forward-secure sealing configured",
+                 "pass" if seal == "yes" else "fail", "Seal=yes", "Seal=%s" % seal if seal else "missing")
+
+    def expected_rule_count(self):
+        n = 0
+        d = os.path.join(self.baseline, "etc/audit/rules.d")
+        for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+            for line in (read_text(os.path.join(d, name)) or "").splitlines():
+                if line.startswith(("-w ", "-a ")):
+                    n += 1
+        return n
+
+    def check_session(self):
+        layer = "session"
+        locks = read_text(self.path("etc/dconf/db/local.d/locks/00-el-screensaver")) or ""
+        for key in ("/org/gnome/desktop/session/idle-delay",
+                    "/org/gnome/desktop/screensaver/lock-enabled"):
+            ok = key in locks
+            self.add("session.dconf_lock%s" % key.replace("/", "."), layer,
+                     "dconf key locked: %s" % key, "pass" if ok else "fail", "locked",
+                     "locked" if ok else "not locked")
+        prof = read_text(self.path("etc/dconf/profile/user")) or ""
+        self.add("session.dconf_profile", layer, "dconf user profile reads system-db:local",
+                 "pass" if "system-db:local" in prof else "fail", "system-db:local",
+                 "present" if "system-db:local" in prof else "missing")
+        gdm = None
+        for rel in ("etc/gdm3/custom.conf", "etc/gdm/custom.conf"):
+            gdm = read_text(self.path(rel))
+            if gdm is not None:
+                break
+        if gdm is None:
+            self.add("session.no_autologin", layer, "GDM automatic login disabled", "skip",
+                     "AutomaticLoginEnable=false", "GDM not installed")
+        else:
+            v = (ini_get(gdm, "daemon", "AutomaticLoginEnable") or "false").lower()
+            self.add("session.no_autologin", layer, "GDM automatic login disabled",
+                     "pass" if v in ("false", "0") else "fail", "false", v)
+        glocks = read_text(self.path("etc/dconf/db/gdm.d/locks/00-el-login-screen")) or ""
+        ok = "disable-user-list" in glocks
+        self.add("session.gdm_user_list_hidden", layer, "Login screen user list disabled",
+                 "pass" if ok else "fail", "locked true", "locked" if ok else "not locked")
+
+    def run(self):
+        steps = [("boot", self.check_boot), ("kernel", self.check_kernel),
+                 ("mac", self.check_mac), ("allowlist", self.check_allowlist),
+                 ("device", self.check_device), ("network", self.check_network),
+                 ("sandbox", self.check_sandbox), ("memsafe", self.check_memsafe),
+                 ("audit", self.check_audit), ("session", self.check_session)]
+        for layer, fn in steps:
+            if not self.wanted(layer):
+                continue
+            if layer in self.skip_layers:
+                self.add("%s.skipped" % layer, layer, "Layer skipped at apply time", "skip",
+                         "applied", "skipped by --skip")
+                continue
+            fn()
+        summary = {s: sum(1 for c in self.checks if c["status"] == s)
+                   for s in ("pass", "fail", "skip")}
+        doc = {
+            "schema": SCHEMA,
+            "tool_version": VERSION,
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "host": {"distro": self.osr.get("ID"), "version_id": self.osr.get("VERSION_ID"),
+                     "family": self.family},
+            "profile": self.profile,
+            "baseline_applied_at": self.manifest.get("applied_at"),
+            "summary": summary,
+            "compliant": summary["fail"] == 0,
+            "disclaimer": "self-check against a CIS/STIG-oriented baseline; not a certification",
+            "checks": self.checks,
+        }
+        json.dump(doc, sys.stdout, indent=2 if self.args.pretty else None, sort_keys=False)
+        sys.stdout.write("\n")
+        return 1 if summary["fail"] else 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="el-harden-verify",
+                                 description="Verify the enterprise-linux hardening baseline; JSON output.")
+    ap.add_argument("--root", default="/", help="redirect file reads (testing)")
+    ap.add_argument("--layer", action="append", default=[],
+                    choices=["boot", "kernel", "mac", "allowlist", "device", "network",
+                             "sandbox", "memsafe", "audit", "session"])
+    ap.add_argument("--profile", choices=("workstation", "developer"),
+                    help="default: from applied.json, else workstation")
+    ap.add_argument("--baseline", help="directory with the expected rootfs (default: shipped copy)")
+    ap.add_argument("--pretty", action="store_true")
+    ap.add_argument("--version", action="version", version=VERSION)
+    args = ap.parse_args(argv)
+    return Verifier(args).run()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  enterprise-linux - firewalld zone for laptops (layer 9, RHEL family).
+  Set as DefaultZone by el-harden-apply. Default-deny inbound: no ssh, no
+  cockpit, no mdns (unlike the distro "public" zone, which allows ssh and
+  cockpit). firewalld always accepts loopback and established/related, and
+  ICMP/ICMPv6 essentials pass unless explicitly blocked.
+  target="default" rejects (ICMP prohibited) rather than silently dropping,
+  which is friendlier for troubleshooting on corporate networks.
+  Not hardware-tested.
+-->
+<zone target="default">
+  <short>EL Workstation</short>
+  <description>enterprise-linux laptop baseline: inbound denied except DHCPv6 client replies. Outbound allowed.</description>
+  <service name="dhcpv6-client"/>
+  <!-- ICMP echo-request is not answered -->
+  <icmp-block name="echo-request"/>
+  <forward/>
+</zone>

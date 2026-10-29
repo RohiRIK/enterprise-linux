@@ -1,0 +1,29 @@
+// enterprise-linux -- udisks2 polkit restrictions (layer 8)
+// Regular users may still mount authorized removable media on their own seat
+// (the default "filesystem-mount" action), but may not:
+//   * mount non-removable/system devices,
+//   * reformat, repartition or change device settings,
+//   * set up loop devices from image files (ISO/IMG files as a bypass of
+//     USBGuard storage policy),
+// unless they are in the admin group rendered by the permissions layer.
+// NOTE: the role->group mapping is owned by security/permissions; "el-admins"
+// is a placeholder group name until that layer renders the real one.
+polkit.addRule(function (action, subject) {
+    var restricted = [
+        "org.freedesktop.udisks2.filesystem-mount-system",
+        "org.freedesktop.udisks2.filesystem-mount-other-seat",
+        "org.freedesktop.udisks2.modify-device",
+        "org.freedesktop.udisks2.modify-device-system",
+        "org.freedesktop.udisks2.format-device",
+        "org.freedesktop.udisks2.modify-system-configuration",
+        "org.freedesktop.udisks2.loop-setup",
+        "org.freedesktop.udisks2.loop-modify-others"
+    ];
+    if (restricted.indexOf(action.id) >= 0) {
+        if (subject.isInGroup("el-admins")) {
+            return polkit.Result.AUTH_ADMIN_KEEP;
+        }
+        return polkit.Result.NO;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

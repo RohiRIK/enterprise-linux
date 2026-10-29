@@ -1,0 +1,16 @@
+# Packages a layer depends on. el-harden-apply reports missing ones and
+# installs them only with --install-packages (live root only).
+# columns: package  family  layer  probe (path relative to root that proves
+#          the package is installed; works for offline --root too)
+auditd	debian	audit	usr/sbin/auditd
+audit	rhel	audit	usr/sbin/auditd
+usbguard	debian	device	usr/sbin/usbguard-daemon
+usbguard	rhel	device	usr/sbin/usbguard-daemon
+nftables	debian	network	usr/sbin/nft
+firewalld	rhel	network	usr/sbin/firewalld
+apparmor	debian	mac	usr/sbin/apparmor_parser
+apparmor-utils	debian	mac	usr/sbin/aa-status
+policycoreutils	rhel	mac	usr/sbin/setenforce
+fapolicyd	rhel	allowlist	usr/sbin/fapolicyd
+libpam-pwquality	debian	session	usr/share/pam-configs/pwquality
+libpwquality	rhel	session	etc/security/pwquality.conf

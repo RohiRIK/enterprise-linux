@@ -1,0 +1,22 @@
+## enterprise-linux audit baseline -- base configuration (layer 13)
+## Implementation guide (CIS/STIG-oriented via ComplianceAsCode), not a
+## certification claim. Loaded by augenrules, which concatenates rules.d/*.rules
+## in lexical order and hoists -D to the top and the last -e to the end.
+##
+## Key naming: every rule carries "-k el_<area>" so a SIEM can filter on the
+## "key" field. Keys are listed in security/hardening/README.md.
+
+## Remove any existing rules
+-D
+
+## Kernel backlog; laptops with bursty activity need more than the default 64.
+-b 8192
+--backlog_wait_time 60000
+
+## Failure mode: 1 = printk. 2 (panic) is a STIG option but unacceptable on
+## end-user laptops.
+-f 1
+
+## Ignore errors while loading (e.g. watches on paths that do not exist on
+## this distro family, such as /etc/apparmor.d on RHEL).
+-i

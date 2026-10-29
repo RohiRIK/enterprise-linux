@@ -1,0 +1,4 @@
+# enterprise-linux -- removable media behaviour (layer 7/8)
+[org/gnome/desktop/media-handling]
+automount-open=false
+autorun-never=true

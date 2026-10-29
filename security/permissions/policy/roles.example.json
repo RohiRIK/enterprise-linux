@@ -1,0 +1,126 @@
+{
+  "$comment": "Example RolePolicy. Mirrors docs/PERMISSIONS.md section 2. Group names are illustrative. Design stage: not validated against a live Entra tenant.",
+  "apiVersion": "enterprise-linux/v1",
+  "kind": "RolePolicy",
+  "metadata": {
+    "name": "default-laptops",
+    "version": "2026.10.0",
+    "description": "Default role set: user, power-user (off), helpdesk, local-admin, break-glass."
+  },
+  "spec": {
+    "sudo": {
+      "implementation": "auto",
+      "securePath": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "allowNopasswd": false,
+      "logfile": "/var/log/sudo.log"
+    },
+    "groupNaming": {
+      "sources": {
+        "entra": {"template": "{slug}", "maxLength": 32},
+        "ad": {"template": "{slug}", "maxLength": 32},
+        "local": {"template": "{name}"}
+      },
+      "overrides": {
+        "entra:group:All-Employees": "all-employees"
+      }
+    },
+    "roles": {
+      "local-admin": {
+        "description": "IT Linux admins: full sudo (with password), polkit admin.",
+        "priority": 100,
+        "groups": ["entra:group:IT-Linux-Admins"],
+        "sudo": {"commands": ["ALL"], "runas": "ALL:ALL"},
+        "polkit": {"admin": true, "default": "auth_admin_keep"}
+      },
+      "helpdesk": {
+        "description": "IT support: logs, network restart, updates; approves JIT. No full sudo.",
+        "priority": 50,
+        "groups": ["entra:group:Helpdesk-T1"],
+        "sudo": {
+          "commands": [
+            "/usr/libexec/el/collect-logs",
+            "/usr/bin/systemctl restart NetworkManager.service"
+          ],
+          "runas": "root"
+        },
+        "polkit": {
+          "admin": false,
+          "default": null,
+          "actions": [
+            {"action": "org.freedesktop.systemd1.manage-units", "units": ["NetworkManager.service", "cups.service"], "verbs": ["restart"], "result": "yes", "comment": "helpdesk may restart NetworkManager and CUPS"},
+            {"action": "org.freedesktop.NetworkManager.*", "result": "yes"},
+            {"action": "org.freedesktop.login1.reboot", "result": "yes"},
+            {"action": "org.freedesktop.packagekit.system-update", "result": "auth_self_keep"}
+          ]
+        }
+      },
+      "power-user": {
+        "description": "Optional (PERMISSIONS.md open question 1). Off by default.",
+        "enabled": false,
+        "priority": 20,
+        "groups": ["entra:group:Engineering"],
+        "polkit": {
+          "actions": [
+            {"action": "org.libvirt.unix.manage", "result": "auth_self_keep"},
+            {"action": "org.freedesktop.NetworkManager.network-control", "result": "yes"}
+          ]
+        }
+      },
+      "user": {
+        "description": "Every employee allowed to log in. No sudo.",
+        "elevated": false,
+        "priority": 0,
+        "polkit": {
+          "actions": [
+            {"action": "org.freedesktop.NetworkManager.settings.modify.own", "result": "yes", "comment": "connect allowed Wi-Fi/VPN"},
+            {"action": "org.freedesktop.NetworkManager.network-control", "result": "yes"},
+            {"action": "org.opensuse.cupspkhelper.mechanism.all-edit", "result": "no", "comment": "no printer driver install"},
+            {"action": "org.freedesktop.packagekit.*", "result": "no", "comment": "apps come from the curated catalog via eld"},
+            {"action": "org.freedesktop.udisks2.encrypted-unlock-system", "result": "no"},
+            {"action": "org.freedesktop.systemd1.manage-units", "result": "no"},
+            {"action": "org.freedesktop.timedate1.*", "result": "no"}
+          ]
+        }
+      }
+    },
+    "login": {
+      "allow": ["entra:group:All-Employees"],
+      "deny": ["entra:group:Offboarding"],
+      "alwaysAllowLocal": ["root"]
+    },
+    "offline": {
+      "graceDays": 7,
+      "signing": "hmac-sha256"
+    },
+    "jit": {
+      "enabled": true,
+      "role": "local-admin",
+      "maxDuration": "60m",
+      "defaultDuration": "30m",
+      "requireReason": true,
+      "revokeOnLogout": true,
+      "approver": {
+        "mode": "helpdesk",
+        "autoApproveGroups": ["entra:group:IT-Linux-Admins-Standby"],
+        "approverRoles": ["helpdesk", "local-admin"],
+        "ticketPattern": "^(INC|RITM|CHG)[0-9]{4,10}$"
+      },
+      "commandAllowlist": [
+        "/usr/bin/apt-get install ./*.deb",
+        "/usr/bin/dnf install ./*.rpm",
+        "/usr/bin/systemctl restart *.service"
+      ]
+    },
+    "sessionRecording": {
+      "enabled": false,
+      "iologDir": "/var/log/sudo-io/%{user}"
+    },
+    "breakGlass": {
+      "account": "elbreakglass",
+      "passwordLength": 24,
+      "escrowCommand": ["/usr/libexec/el/escrow-breakglass"],
+      "rotateAfterUseMinutes": 60,
+      "rotateEveryDays": 30
+    }
+  }
+}

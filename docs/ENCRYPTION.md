@@ -1,6 +1,6 @@
 # Encryption
 
-**Status:** design only — nothing built.  
+**Status:** design; first implementation in [`security/encryption/`](../security/encryption/README.md) (container-tested only, not hardware-tested).  
 **Date:** 2026-10-28  
 **Related:** [HARDENING.md](HARDENING.md), [CONTROL-API.md](CONTROL-API.md), [MDM.md](MDM.md)
 

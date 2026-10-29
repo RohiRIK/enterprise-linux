@@ -1,0 +1,5 @@
+# enterprise-linux -- GDM greeter (layer 16)
+[org/gnome/login-screen]
+# Do not list local/cached user names on the login screen
+disable-user-list=true
+# No "Restart/Power off" for unauthenticated users is NOT set: laptops need it.

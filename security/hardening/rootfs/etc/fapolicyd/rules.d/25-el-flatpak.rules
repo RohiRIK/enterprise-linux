@@ -1,0 +1,12 @@
+# enterprise-linux -- fapolicyd rules (layer 7, RHEL family)
+# Evaluated together with the distro's shipped rules.d (fagenrules merges by
+# file name; first matching rule wins). This file sorts before the distro's
+# 30-patterns / 40-bad-elf / 42-trusted-elf / 90-deny-execute rules.
+#
+# Curated apps are system-wide Flatpaks (docs/CURATED-APPS.md). Binaries in
+# the system Flatpak store are not in the RPM trust database, so they would be
+# denied by 90-deny-execute. The system store is only writable by root /
+# flatpak-system-helper (polkit-gated by policy), so trusting it is
+# equivalent to trusting the curated catalog. User installs under
+# ~/.local/share/flatpak stay blocked -- intentional.
+allow perm=any all : dir=/var/lib/flatpak/
