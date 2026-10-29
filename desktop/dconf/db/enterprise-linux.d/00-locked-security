@@ -1,0 +1,59 @@
+# Tier: LOCKED (org). Every key in this file is also listed in
+# locks/00-locked-security. Only MDM policy (via eld) may change these.
+# Users see them greyed out in Settings.
+
+# Screen lock. GNOME has no "maximum" for idle-delay, so the value is
+# locked outright; eld may later enforce a max instead (desktop.* policy).
+[org/gnome/desktop/screensaver]
+lock-enabled=true
+lock-delay=uint32 0
+idle-activation-enabled=true
+
+[org/gnome/desktop/session]
+idle-delay=uint32 600
+
+[org/gnome/desktop/lockdown]
+disable-lock-screen=false
+user-administration-disabled=true
+
+# No message previews on the lock screen.
+[org/gnome/desktop/notifications]
+show-in-lock-screen=false
+
+# Telemetry off; block new USB devices while the screen is locked
+# (complements USBGuard policy from the hardening layer).
+[org/gnome/desktop/privacy]
+report-technical-problems=false
+send-software-usage-stats=false
+usb-protection=true
+usb-protection-level='lockscreen'
+
+# Never auto-run or auto-open removable media.
+[org/gnome/desktop/media-handling]
+automount-open=false
+autorun-never=true
+
+# Remote desktop sharing is off; remote assist goes through the IT app
+# and must be accepted by the user.
+[org/gnome/desktop/remote-desktop/rdp]
+enable=false
+
+[org/gnome/desktop/remote-desktop/vnc]
+enable=false
+
+# Placeholder: eld's network provider rewrites this from network.proxy
+# policy. Locked so users cannot bypass the org proxy.
+[org/gnome/system/proxy]
+mode='none'
+
+# Only the org's extension set: a familiar bottom taskbar and a system tray.
+[org/gnome/shell]
+allow-extension-installation=false
+disable-user-extensions=false
+enabled-extensions=['dash-to-panel@jderose9.github.com', 'appindicatorsupport@rgcjonas.gmail.com']
+
+# Updates come from the frozen repo through eld, never from GNOME Software.
+[org/gnome/software]
+allow-updates=false
+download-updates=false
+download-updates-notify=false

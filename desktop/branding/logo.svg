@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <!-- Placeholder org logo. Replace with the org's own (SVG or PNG, ~96px tall). -->
+  <rect x="8" y="8" width="80" height="80" rx="18" fill="#1f3a5f"/>
+  <path d="M30 30 h36 v8 h-26 v6 h20 v8 h-20 v6 h26 v8 h-36 z" fill="#ffffff"/>
+</svg>
