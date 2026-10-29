@@ -182,8 +182,8 @@ class SelectClientTests(unittest.TestCase):
 
 class LockedTests(unittest.TestCase):
     def test_explain(self):
-        keys = ["/org/gnome/desktop/session/idle-delay", "/org/gnome/system/proxy/"]
-        self.assertTrue(is_locked("/org/gnome/system/proxy/mode", keys))
+        keys = ["/org/gnome/desktop/session/idle-delay", "/system/proxy/"]
+        self.assertTrue(is_locked("/system/proxy/mode", keys))
         self.assertFalse(is_locked("/org/gnome/desktop/interface/color-scheme", keys))
         locked, title, reason = explain("/org/gnome/desktop/session/idle-delay", keys)
         self.assertTrue(locked)

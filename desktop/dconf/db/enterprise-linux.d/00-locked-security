@@ -43,7 +43,7 @@ enable=false
 
 # Placeholder: eld's network provider rewrites this from network.proxy
 # policy. Locked so users cannot bypass the org proxy.
-[org/gnome/system/proxy]
+[system/proxy]
 mode='none'
 
 # Only the org's extension set: a familiar bottom taskbar and a system tray.

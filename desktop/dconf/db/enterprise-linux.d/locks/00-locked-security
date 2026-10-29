@@ -13,7 +13,7 @@
 /org/gnome/desktop/media-handling/autorun-never
 /org/gnome/desktop/remote-desktop/rdp/enable
 /org/gnome/desktop/remote-desktop/vnc/enable
-/org/gnome/system/proxy/mode
+/system/proxy/mode
 /org/gnome/shell/allow-extension-installation
 /org/gnome/shell/disable-user-extensions
 /org/gnome/shell/enabled-extensions

@@ -26,7 +26,7 @@ _REASONS = {
     "/org/gnome/desktop/privacy/": "Diagnostics are not sent to third parties from managed devices.",
     "/org/gnome/desktop/media-handling/": "Removable media never runs programs automatically.",
     "/org/gnome/desktop/remote-desktop/": "Remote access only through IT remote assist, which you must accept.",
-    "/org/gnome/system/proxy/": "Network access goes through your organization's proxy.",
+    "/system/proxy/": "Network access goes through your organization's proxy.",
     "/org/gnome/shell/": "Only extensions approved by your organization are allowed.",
     "/org/gnome/software/": "Updates are installed by your organization's update service. See the Updates tab.",
     "/org/gnome/login-screen/": "The sign-in screen is set by your organization.",

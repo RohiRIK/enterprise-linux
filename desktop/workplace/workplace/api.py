@@ -633,7 +633,7 @@ def _demo_facts(now):
                 "/org/gnome/desktop/session/idle-delay",
                 "/org/gnome/desktop/lockdown/disable-lock-screen",
                 "/org/gnome/shell/enabled-extensions",
-                "/org/gnome/system/proxy/mode",
+                "/system/proxy/mode",
             ],
             "default_apps": {
                 "browser": {"current": "org.mozilla.firefox", "locked": False,

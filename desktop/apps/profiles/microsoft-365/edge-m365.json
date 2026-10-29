@@ -1,0 +1,29 @@
+{
+  "WebAppInstallForceList": [
+    {
+      "url": "https://www.office.com/launch/word",
+      "default_launch_container": "window",
+      "create_desktop_shortcut": false
+    },
+    {
+      "url": "https://www.office.com/launch/excel",
+      "default_launch_container": "window",
+      "create_desktop_shortcut": false
+    },
+    {
+      "url": "https://www.office.com/launch/powerpoint",
+      "default_launch_container": "window",
+      "create_desktop_shortcut": false
+    },
+    {
+      "url": "https://outlook.office.com/mail/",
+      "default_launch_container": "window",
+      "create_desktop_shortcut": false
+    },
+    {
+      "url": "https://teams.microsoft.com/",
+      "default_launch_container": "window",
+      "create_desktop_shortcut": false
+    }
+  ]
+}

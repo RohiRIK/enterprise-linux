@@ -1,0 +1,6 @@
+# Tier: org default. Dock favorites for the Microsoft 365 profile.
+# Word/Excel/PowerPoint/Outlook/Teams are Edge web apps (edge-m365.json); Edge
+# names their launchers from a hash of the URL, so they cannot be pinned here
+# reliably. They appear in the app grid after first sign-in.
+[org/gnome/shell]
+favorite-apps=['microsoft-edge.desktop', 'firefox-esr.desktop', 'org.gnome.Nautilus.desktop', 'libreoffice-writer.desktop', 'libreoffice-calc.desktop', 'libreoffice-impress.desktop', 'org.mozilla.Thunderbird.desktop', 'org.enterpriselinux.Workplace.desktop']

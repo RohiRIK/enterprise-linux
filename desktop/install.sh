@@ -32,8 +32,8 @@ done
 root="${root%/}"
 
 # Load KEY=VALUE pairs into BRAND_<KEY> environment variables for rendering.
-# Values end up inside single-quoted GVariant strings, so reject quotes,
-# backslashes and @ (template marker).
+# Values end up inside single-quoted GVariant strings, so reject quotes
+# and backslashes.
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in ''|'#'*) continue ;; esac
   key="${line%%=*}"
@@ -42,7 +42,7 @@ while IFS= read -r line || [ -n "$line" ]; do
     echo "error: bad branding key: $key" >&2; exit 1
   fi
   case "$value" in
-    *"'"*|*'\'*|*'@'*) echo "error: $key must not contain ' \\ or @" >&2; exit 1 ;;
+    *"'"*|*'\'*) echo "error: $key must not contain ' or \\" >&2; exit 1 ;;
   esac
   export "BRAND_$key=$value"
 done < "$branding"
@@ -94,6 +94,9 @@ if [ -x "$here/apps/install-apps.sh" ]; then
 else
   echo "warning: desktop/apps/install-apps.sh not found; skipping default apps" >&2
 fi
+
+echo "==> Workplace IT app"
+"$here/workplace/install.sh" --root "${root:-/}"
 
 if [ -z "$root" ] && command -v dconf >/dev/null 2>&1; then
   echo "==> dconf update"
