@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# el-install-target - turn a freshly installed Ubuntu 26.04 root into an
+# enterprise-linux workstation. Called from autoinstall late-commands with
+# the ISO payload under /cdrom/el; also runs against any 26.04 root tree.
+#
+#   el-install-target --target /target --media /cdrom/el [--profile default]
+#                     [--install-key-file FILE] [--no-tpm] [--no-apps]
+#                     [--ci-report] [--log FILE]
+#
+# Steps (each one logs "== step"):
+#   1 eld/elctl .deb            5 hardening (offline, --root target)
+#   2 security tools -> /usr    6 kernel cmdline + UKI hook (docs/KERNEL.md)
+#   3 curated apps (elapps)     7 TPM2 unlock slot (if a TPM is present)
+#   4 GNOME desktop layer       8 image release record
+set -euo pipefail
+
+target=/target
+media=/cdrom/el
+profile=default
+install_key=""
+tpm=1
+apps=1
+ci_report=0
+log=""
+
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --target) target="${2:?}"; shift 2 ;;
+    --media) media="${2:?}"; shift 2 ;;
+    --profile) profile="${2:?}"; shift 2 ;;
+    --install-key-file) install_key="${2:?}"; shift 2 ;;
+    --no-tpm) tpm=0; shift ;;
+    --no-apps) apps=0; shift ;;
+    --ci-report) ci_report=1; shift ;;
+    --log) log="${2:?}"; shift 2 ;;
+    -h|--help) usage 0 ;;
+    *) echo "el-install-target: unknown argument: $1" >&2; usage 2 ;;
+  esac
+done
+target="${target%/}"
+[ -d "$target/etc" ] || { echo "el-install-target: $target is not a root tree" >&2; exit 2; }
+[ -d "$media/security" ] || { echo "el-install-target: $media has no payload" >&2; exit 2; }
+
+[ -n "$log" ] || log="$target/var/log/el/install-target.log"
+mkdir -p "$(dirname "$log")"
+exec > >(tee -a "$log") 2>&1
+
+step() { echo "== $*"; }
+pending=()
+
+# Run a command inside the target. curtin sets up /proc, /sys, /dev and
+# resolv.conf the way the installer expects; plain chroot is the fallback
+# for tests on a debootstrap tree that already has those mounted.
+in_target() {
+  if command -v curtin >/dev/null 2>&1; then
+    curtin in-target --target="$target" -- "$@"
+  else
+    chroot "$target" "$@"
+  fi
+}
+
+stage="$target/var/tmp/el-install"
+rm -rf "$stage"
+mkdir -p "$stage"
+trap 'rm -rf "$stage"' EXIT
+
+step "1 eld/elctl package"
+deb="$(find "$media/pool" -maxdepth 1 -name 'el-eld_*.deb' | sort -V | tail -n1)"
+[ -n "$deb" ] || { echo "no el-eld .deb in $media/pool" >&2; exit 1; }
+cp "$deb" "$stage/"
+in_target env DEBIAN_FRONTEND=noninteractive apt-get install -y "/var/tmp/el-install/$(basename "$deb")"
+
+step "2 security tools"
+lib="$target/usr/lib/el"
+mkdir -p "$lib"
+for part in encryption hardening permissions; do
+  rm -rf "${lib:?}/$part"
+  cp -a "$media/security/$part" "$lib/$part"
+  rm -rf "$lib/$part/tests"
+done
+for tool in "$lib"/encryption/sbin/el-* "$lib"/hardening/bin/el-* "$lib"/permissions/bin/el-*; do
+  ln -sfn "${tool#"$target"}" "$target/usr/sbin/$(basename "$tool")"
+done
+install -D -m 0755 "$media/image/uki/el-build-uki" "$target/usr/sbin/el-build-uki"
+
+step "3 curated apps (profile $profile)"
+mkdir -p "$stage/src"
+cp -a "$media/catalog" "$media/policies" "$media/scripts" "$stage/src/"
+if [ "$apps" = 1 ]; then
+  if ! in_target python3 /var/tmp/el-install/src/scripts/apps/elapps apply --profile "$profile" --family apt; then
+    # Offline install or a vendor repo is down: write policies and defaults
+    # now; eld's app provider installs the rest on first boot.
+    echo "warning: app install failed, falling back to --files-only"
+    in_target python3 /var/tmp/el-install/src/scripts/apps/elapps apply --profile "$profile" --family apt --files-only
+    pending+=("apps: packages for profile $profile not installed at build time")
+  fi
+else
+  in_target python3 /var/tmp/el-install/src/scripts/apps/elapps apply --profile "$profile" --family apt --files-only
+fi
+
+step "4 desktop"
+bash "$media/desktop/install.sh" --root "$target" --profile "$profile"
+if [ -x "$target/usr/bin/dconf" ]; then
+  in_target dconf update
+fi
+
+step "5 hardening (offline)"
+mkdir -p "$target/var/lib/el/hardening"
+python3 "$media/security/hardening/bin/el-harden-apply" --root "$target" --family debian \
+  --profile "$( [ "$profile" = developer ] && echo developer || echo workstation )" --json \
+  > "$target/var/lib/el/hardening/install-apply.json"
+
+step "6 kernel command line and UKI hook"
+# docs/KERNEL.md: lockdown and module signature enforcement are explicit,
+# not left to the Secure Boot heuristic (Ubuntu builds with
+# LOCK_DOWN_KERNEL_FORCE_NONE).
+el_cmdline="lockdown=integrity module.sig_enforce=1"
+mkdir -p "$target/etc/default/grub.d"
+cat > "$target/etc/default/grub.d/90-enterprise-linux.cfg" <<CFG
+# enterprise-linux (image/late/el-install-target): docs/KERNEL.md
+GRUB_CMDLINE_LINUX_DEFAULT="\$GRUB_CMDLINE_LINUX_DEFAULT $el_cmdline"
+CFG
+root_src="$(findmnt -no SOURCE --target "$target" 2>/dev/null || true)"
+root_uuid=""
+if [ -n "$root_src" ]; then
+  root_uuid="$(blkid -s UUID -o value "$root_src" 2>/dev/null || true)"
+fi
+if [ -n "$root_uuid" ]; then
+  echo "root=UUID=$root_uuid ro quiet splash $el_cmdline" > "$target/etc/kernel/cmdline"
+else
+  echo "warning: could not resolve the root device; /etc/kernel/cmdline left for first boot"
+  pending+=("uki: /etc/kernel/cmdline needs root=")
+fi
+install -D -m 0755 "$media/image/uki/zz-el-uki" "$target/etc/kernel/postinst.d/zz-el-uki"
+if [ ! -e "$target/etc/el/uki.conf" ]; then
+  install -D -m 0644 "$media/image/uki/uki.conf.example" "$target/etc/el/uki.conf.example"
+fi
+if [ -x "$target/usr/sbin/update-grub" ] && [ -d "$target/boot/grub" ]; then
+  in_target update-grub
+fi
+
+step "7 TPM2 unlock"
+luks_dev="$(in_target sh -c "lsblk -rno PATH,FSTYPE | awk '\$2==\"crypto_LUKS\"{print \$1; exit}'" || true)"
+if [ -z "$luks_dev" ]; then
+  echo "no LUKS volume found; skipping"
+  pending+=("encryption: no LUKS volume at install time")
+elif [ "$tpm" = 0 ] || [ ! -e /dev/tpmrm0 ]; then
+  echo "no TPM (or --no-tpm); the install key stays the only unlock method"
+  pending+=("encryption: TPM2 slot not enrolled")
+elif [ -z "$install_key" ] || [ ! -r "$install_key" ]; then
+  echo "no install key file; cannot add a TPM2 slot"
+  pending+=("encryption: TPM2 slot not enrolled (no install key)")
+else
+  cp "$install_key" "$stage/install.key"
+  chmod 0600 "$stage/install.key"
+  in_target /usr/sbin/el-luks-enroll --device "$luks_dev" --mode tpm2 \
+    --unlock-key-file /var/tmp/el-install/install.key --regenerate-initrd --json \
+    > "$target/var/lib/el/encryption-enroll.json" || pending+=("encryption: TPM2 enroll failed, see install-target.log")
+fi
+# The install key slot is removed by el-recovery-escrow once a recovery key
+# is escrowed (open decision in docs/ENCRYPTION.md §6), never before.
+[ -z "$luks_dev" ] || pending+=("encryption: install key slot present until recovery key escrow is configured")
+
+if [ "$ci_report" = 1 ]; then
+  install -D -m 0755 "$media/image/tests/el-ci-report" "$target/usr/libexec/el/el-ci-report"
+  install -D -m 0644 "$media/image/tests/el-ci-report.service" "$target/etc/systemd/system/el-ci-report.service"
+  ln -sfn /etc/systemd/system/el-ci-report.service "$target/etc/systemd/system/multi-user.target.wants/el-ci-report.service"
+fi
+
+step "8 image release"
+mkdir -p "$target/var/lib/el/image"
+python3 - "$media/BUILD.json" "$target/var/lib/el/image/install.json" "$profile" "${pending[@]}" <<'PY'
+import json, sys, datetime
+build_file, out, profile, *pending = sys.argv[1:]
+try:
+    build = json.load(open(build_file))
+except OSError:
+    build = {}
+json.dump({
+    "schema": "el.image.install/v1",
+    "installed": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "profile": profile,
+    "build": build,
+    "pending": pending,
+}, open(out, "w"), indent=2)
+PY
+cp "$media/BUILD.json" "$target/etc/el-release.json" 2>/dev/null || true
+echo "done; pending items:"
+printf '  - %s\n' "${pending[@]}"

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Groups and the service account named in /etc/eld/eld.json.
+set -e
+if [ "$1" = configure ]; then
+  for g in eld-helpdesk eld-admins; do
+    getent group "$g" >/dev/null || addgroup --system "$g" >/dev/null
+  done
+  if ! getent passwd el-agent >/dev/null; then
+    adduser --system --group --no-create-home --home /nonexistent \
+      --shell /usr/sbin/nologin el-agent >/dev/null
+  fi
+  if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null || true
+    systemctl enable --now eld.service >/dev/null || true
+  else
+    # Image build (chroot): enable for first boot only.
+    systemctl enable eld.service >/dev/null 2>&1 || true
+  fi
+fi
+exit 0

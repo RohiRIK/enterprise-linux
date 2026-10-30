@@ -1,0 +1,12 @@
+# /etc/el/uki.conf - LAB USE ONLY: signs UKIs on the device itself, so the
+# signing key has to live on the device. Production fleets get UKIs signed
+# in the build pipeline instead (docs/KERNEL.md "Signing"). Copy here once
+# the device trusts our Secure Boot key
+# (MOK or our own db). Until this file sets EL_UKI_SB_KEY, the kernel hook
+# does nothing and the stock shim -> GRUB -> signed kernel path is used.
+# docs/KERNEL.md "Signing".
+#EL_UKI_SB_KEY=/etc/el/keys/db.key        # or a PKCS#11 URI once keys live in an HSM
+#EL_UKI_SB_CERT=/etc/el/keys/db.crt
+#EL_UKI_PCR_KEY=/etc/el/keys/pcr.key
+#EL_UKI_PCR_PUB=/etc/systemd/tpm2-pcr-public-key.pem
+#EL_UKI_OUTPUT_DIR=/boot/efi/EFI/Linux

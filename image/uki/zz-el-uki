@@ -1,0 +1,18 @@
+#!/bin/sh
+# /etc/kernel/postinst.d/zz-el-uki - rebuild our UKI after every kernel or
+# initrd update. Runs after the initramfs hook (zz sorts last). Does nothing
+# until keys are provisioned in /etc/el/uki.conf (docs/KERNEL.md), so the
+# stock shim -> GRUB -> signed kernel path keeps working on its own.
+set -e
+kver="$1"
+conf=/etc/el/uki.conf
+[ -r "$conf" ] || exit 0
+# shellcheck disable=SC1090
+. "$conf"
+[ -n "${EL_UKI_SB_KEY:-}" ] || exit 0
+# A new UKI changes PCR 4 and 11. With the signed PCR 11 policy this is a
+# no-op; el-tpm-reseal-post.service finishes the job on the next boot.
+if command -v el-tpm-reseal >/dev/null 2>&1; then
+  el-tpm-reseal pre-update --kind uki || echo "zz-el-uki: el-tpm-reseal says a recovery prompt is expected" >&2
+fi
+el-build-uki --kernel-version "$kver"

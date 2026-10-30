@@ -4,7 +4,7 @@ Concept ADR and repo skeleton for a **Linux-only, locked, curated org workstatio
 
 ## What
 
-Not DIY Linux. **The substrate is under comparison**; the product is the stack on top. See [`docs/DISTRO-COMPARISON.md`](docs/DISTRO-COMPARISON.md) for the decision input:
+Not DIY Linux. **The substrate is Ubuntu 26.04 LTS** with its stock signed kernel; the product is the stack on top. See [`docs/DISTRO-COMPARISON.md`](docs/DISTRO-COMPARISON.md) for how it was chosen:
 
 - **Frozen core** — pinned chosen-substrate LTS, controlled updates, reproducible images
 - **Strong SSO** — Entra-first org login (headline)
@@ -33,22 +33,23 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 - No Intune/Jamf badges. Code dependencies stay a minimal, reviewed set (today: serde, serde_json, libc for `eld`/`elctl`).
 - No AI-washing (“AI OS”) or bolting a chatbot on login.
 - No building a full MDM *vendor* that replaces Intune/Jamf on day 1 — we integrate / are ready for org MDM.
-- No FedRAMP/CIS certification claims; no ISO in this repo yet.
+- No FedRAMP/CIS certification claims; no ISO blobs in this repo (the build remasters the official Ubuntu ISO, see [`image/`](image/README.md)).
 - No marketing fluff.
 
 ## Status
 
-**Concept, plus one working prototype:** the control daemon `eld` and CLI `elctl` (Rust, `crates/`) — facts, policy, actions, roles, audit and events over a local socket; most settings are recorded but not yet enforced, see [`docs/ELD.md`](docs/ELD.md). Substrate: under comparison, not locked. MDM, marketplace, and AI are docs/research stubs — not live. Open questions for Rohi are in the ADR and the [distro comparison](docs/DISTRO-COMPARISON.md).
+**Concept, plus one working prototype:** the control daemon `eld` and CLI `elctl` (Rust, `crates/`) — facts, policy, actions, roles, audit and events over a local socket; most settings are recorded but not yet enforced, see [`docs/ELD.md`](docs/ELD.md). Substrate: Ubuntu 26.04 LTS. A first installer build ([`image/`](image/README.md)) exists but has not yet passed a full VM install. MDM, marketplace, and AI are docs/research stubs — not live. Open questions for Rohi are in the ADR and the [distro comparison](docs/DISTRO-COMPARISON.md).
 
 ## Docs
 
 - [`docs/OVERVIEW.md`](docs/OVERVIEW.md) — plain-English front door
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — ADR
-- [`docs/DISTRO-COMPARISON.md`](docs/DISTRO-COMPARISON.md) — substrate decision input; no base locked
+- [`docs/DISTRO-COMPARISON.md`](docs/DISTRO-COMPARISON.md) — substrate comparison (Ubuntu 26.04 LTS chosen)
+- [`docs/KERNEL.md`](docs/KERNEL.md) — stock signed kernel, lockdown, module policy, UKI signing
 - [`docs/IDENTITY.md`](docs/IDENTITY.md) — SSO stub
 - [`docs/MDM.md`](docs/MDM.md) — target story + hooks (**no live claim**)
 - [`docs/HARDENING.md`](docs/HARDENING.md) — layered security mechanisms + locked updates (design)
-- [`docs/IMAGE-PIPELINE.md`](docs/IMAGE-PIPELINE.md) — stub
+- [`docs/IMAGE-PIPELINE.md`](docs/IMAGE-PIPELINE.md) — ISO build from the official 26.04 ISO + CI VM test
 - [`docs/CURATED-APPS.md`](docs/CURATED-APPS.md) — selectable app bundles; first build in [`catalog/`](catalog/README.md) (browsers with enterprise policies, Microsoft 365 + open-source office)
 - [`docs/MARKETPLACE.md`](docs/MARKETPLACE.md) — concept stub (**not live**)
 - [`docs/AI-RESEARCH.md`](docs/AI-RESEARCH.md) — AI-for-investigation research stub (**no ship claim**)

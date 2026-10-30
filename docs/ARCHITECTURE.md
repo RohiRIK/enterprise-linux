@@ -20,7 +20,7 @@ Organizations that want Linux on **employee workstations** usually get one of:
 
 A stock distribution as a blank canvas is not enough for org fleets. IT needs a **locked, pre-hardened, curated workstation product**: strong SSO, strong MDM support, frozen core, curated apps, controlled auto-updates, and (later) a first-party plugin channel — with room to explore a **distinct AI-for-investigation** capability that does not exist yet (research only until it earns a ship).
 
-**Enterprise Linux (working name)** is that product. **The substrate remains under comparison**, not the brand story; see [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md).
+**Enterprise Linux (working name)** is that product. **The substrate is Ubuntu 26.04 LTS** (chosen 2026-10-30), not the brand story; see [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md).
 
 Primary user: IT / security / platform owners in M365 / Entra (or AD) shops who want Linux next to Windows under the same control plane expectations.
 
@@ -40,7 +40,7 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 | **Controlled plugin marketplace** | Optional channel of plugins **we** prepare. Concept until signing + supply chain exist. |
 | **AI-for-investigation (research)** | Explore a *distinct* AI capability that does not exist yet. Open research track — **not** AI-washing, not a ship claim. |
 
-**Non-positioning:** not a brand-only distro remix. Substrate = under comparison; product = the locked curated stack + MDM-ready control plane above it.
+**Non-positioning:** not a brand-only distro remix. Substrate = Ubuntu 26.04 LTS; product = the locked curated stack + MDM-ready control plane above it.
 
 **Locked ahead of time:** the default image is ready and constrained before it reaches the user — apps, harden, update policy, identity hooks, MDM hooks — not a blank DIY install.
 
@@ -61,19 +61,20 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 
 ---
 
-## 4. Substrate: candidates under comparison
+## 4. Substrate: Ubuntu 26.04 LTS
 
 The candidate set is documented in [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md): Ubuntu 24.04 LTS, RHEL, Rocky, AlmaLinux, Debian Stable, SUSE/Leap, and a custom minimal frozen core.
 
 | Candidate lane | Role | Status |
 |---|---|---|
-| Ubuntu 24.04 LTS | LTS workstation substrate candidate | Under comparison |
-| RHEL-compatible (RHEL, Rocky, AlmaLinux) | Enterprise-compatible substrate candidates | Under comparison |
-| Debian Stable | Stable, community substrate candidate | Under comparison |
-| SUSE / Leap | Enterprise or community substrate candidates | Under comparison |
-| Custom minimal frozen core | Full-control substrate candidate | Under comparison |
+| **Ubuntu 26.04 LTS** | Workstation substrate | **Chosen 2026-10-30** |
+| Ubuntu 24.04 LTS | Older LTS | Not chosen |
+| RHEL-compatible (RHEL, Rocky, AlmaLinux) | Enterprise-compatible substrate candidates | Not chosen; security/ keeps the rhel family working |
+| Debian Stable | Stable, community substrate candidate | Not chosen |
+| SUSE / Leap | Enterprise or community substrate candidates | Not chosen |
+| Custom minimal frozen core | Full-control substrate candidate | Not chosen |
 
-**Decision:** no substrate is locked yet. Rohi reads the comparison before choosing; there is no day-1 lock or recommendation here. Product value remains SSO + MDM-ready design + curated apps + locked updates + (later) marketplace + AI-for-investigation research — not any one base for its own sake.
+**Decision (Rohi, 2026-10-30):** Ubuntu 26.04 LTS. Intune supports it, it is the newest LTS with the longest support window, laptop hardware support is strong, and the hardening/encryption code already covers it. The kernel is the stock Canonical-signed one ([`KERNEL.md`](KERNEL.md)); the image remasters the official ISO ([`IMAGE-PIPELINE.md`](IMAGE-PIPELINE.md)). Product value remains SSO + MDM-ready design + curated apps + locked updates + (later) marketplace + AI-for-investigation research — not any one base for its own sake.
 
 ---
 
@@ -241,7 +242,8 @@ No ISO blobs in git.
 | Topic | Decision |
 |---|---|
 | Product | Locked curated org workstation — **not** a DIY distribution install |
-| Substrate | **Under comparison; not locked** — see [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md) |
+| Substrate | **Ubuntu 26.04 LTS** (2026-10-30); comparison kept in [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md) |
+| Kernel | Stock signed Ubuntu kernel + `lockdown=integrity module.sig_enforce=1`, signed UKI as stage 2 — [`KERNEL.md`](KERNEL.md) |
 | Headlines | Strong **SSO** + strong **MDM support** + frozen core + locked auto-updates + curated apps |
 | Marketplace | Controlled, first-party; concept until ready |
 | AI-for-investigation | Distinct capability **research**; no AI-wash; no ship yet |

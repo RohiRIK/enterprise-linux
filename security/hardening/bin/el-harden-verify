@@ -25,7 +25,7 @@ import subprocess
 import sys
 
 VERSION = "0.1.0"
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.realpath(__file__))
 SCHEMA = "el.hardening.verify/v1"
 
 

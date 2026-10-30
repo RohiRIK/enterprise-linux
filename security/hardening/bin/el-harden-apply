@@ -30,7 +30,7 @@ import subprocess
 import sys
 
 VERSION = "0.1.0"
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.realpath(__file__))
 DEFAULT_SOURCE = os.path.normpath(os.path.join(HERE, ".."))
 
 # HARDENING.md §1 layer number -> short name used by --skip and files.tsv
