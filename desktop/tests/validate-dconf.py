@@ -38,6 +38,15 @@ NEVER_LOCK = (
     "/org/gnome/shell/favorite-apps",
     "/org/gnome/desktop/input-sources/",
 )
+# Locks that security/hardening/el-harden-verify checks for; never drop them.
+REQUIRED_LOCKS = {
+    "enterprise-linux.d": (
+        "/org/gnome/desktop/session/idle-delay",
+        "/org/gnome/desktop/screensaver/lock-enabled",
+        "/org/gnome/desktop/media-handling/autorun-never",
+    ),
+    "gdm.d": ("/org/gnome/login-screen/disable-user-list",),
+}
 LOCKED_PREFIXES = ("00-", "90-")
 DEFAULT_PREFIXES = ("10-", "20-", "30-")
 
@@ -131,6 +140,9 @@ def check_db(db_dir, schemas, strict, brand):
                     errors.append("%s: %s is org-default tier but locked" % (f, k))
         else:
             errors.append("%s: file name must start with 00-, 10-, 20-, 30- or 90-" % f)
+    for required in REQUIRED_LOCKS.get(name, ()):
+        if required not in locks:
+            errors.append("%s: %s must stay locked (checked by el-harden-verify)" % (name, required))
     for lock in sorted(locks):
         if lock.endswith("/"):
             if not any(k.startswith(lock) for k in all_keys):

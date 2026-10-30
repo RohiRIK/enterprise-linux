@@ -1,6 +1,7 @@
 /org/gnome/desktop/screensaver/lock-enabled
 /org/gnome/desktop/screensaver/lock-delay
 /org/gnome/desktop/screensaver/idle-activation-enabled
+/org/gnome/desktop/screensaver/ubuntu-lock-on-suspend
 /org/gnome/desktop/session/idle-delay
 /org/gnome/desktop/lockdown/disable-lock-screen
 /org/gnome/desktop/lockdown/user-administration-disabled

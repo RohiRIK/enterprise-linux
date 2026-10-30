@@ -4,13 +4,16 @@
 
 # Screen lock. GNOME has no "maximum" for idle-delay, so the value is
 # locked outright; eld may later enforce a max instead (desktop.* policy).
+# Values match security/hardening (5 minutes, lock on suspend).
+# ubuntu-lock-on-suspend exists only on Ubuntu; other distros ignore it.
 [org/gnome/desktop/screensaver]
 lock-enabled=true
 lock-delay=uint32 0
 idle-activation-enabled=true
+ubuntu-lock-on-suspend=true
 
 [org/gnome/desktop/session]
-idle-delay=uint32 600
+idle-delay=uint32 300
 
 [org/gnome/desktop/lockdown]
 disable-lock-screen=false

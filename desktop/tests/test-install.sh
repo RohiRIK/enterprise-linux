@@ -20,7 +20,7 @@ expect() { # schema key writable value
   fi
 }
 
-for profile in open-source microsoft-365; do
+for profile in default developer microsoft365 open-source; do
   root="$tmp/$profile"
   "$here/install.sh" --root "$root" --profile "$profile" >/dev/null
   dconf compile "$tmp/$profile.db" "$root/etc/dconf/db/enterprise-linux.d"
@@ -29,7 +29,7 @@ for profile in open-source microsoft-365; do
   printf 'user-db:user\nfile-db:%s\n' "$tmp/$profile.db" > "$tmp/profile"
   export DCONF_PROFILE="$tmp/profile"
   echo "== $profile: session"
-  expect org.gnome.desktop.session idle-delay false "uint32 600"
+  expect org.gnome.desktop.session idle-delay false "uint32 300"
   expect org.gnome.desktop.screensaver lock-enabled false true
   expect org.gnome.desktop.privacy usb-protection-level false "'lockscreen'"
   expect org.gnome.system.proxy mode false ""
@@ -42,15 +42,17 @@ for profile in open-source microsoft-365; do
   expect org.gnome.desktop.a11y.applications screen-reader-enabled true ""
   case "$profile" in
     open-source) want="firefox-esr.desktop" ;;
-    microsoft-365) want="microsoft-edge.desktop" ;;
+    *) want="microsoft-edge.desktop" ;;
   esac
   if gsettings get org.gnome.shell favorite-apps | grep -q "'$want'"; then
     echo "ok   dock starts with $want"
   else
     echo "FAIL dock is missing $want"; fail=1
   fi
-  grep -q "^x-scheme-handler/https=$want$" "$root/etc/xdg/mimeapps.list" \
-    && echo "ok   default browser $want" || { echo "FAIL default browser"; fail=1; }
+  # Browser policies and mimeapps.list belong to scripts/apps/elapps.
+  for owned in etc/xdg/mimeapps.list etc/firefox etc/opt etc/chromium; do
+    if [ -e "$root/$owned" ]; then echo "FAIL desktop layer wrote $owned (owned by elapps)"; fail=1; fi
+  done
 
   printf 'user-db:user\nfile-db:%s\n' "$tmp/$profile-gdm.db" > "$tmp/profile"
   echo "== $profile: login screen"
@@ -60,8 +62,5 @@ for profile in open-source microsoft-365; do
     echo "FAIL unrendered @TEMPLATE@ marker under /etc/dconf"; fail=1
   fi
 done
-
-[ -f "$tmp/microsoft-365/etc/opt/edge/policies/managed/edge-m365.json" ] \
-  && echo "ok   Microsoft 365 web apps policy installed" || { echo "FAIL edge-m365.json"; fail=1; }
 
 exit "$fail"

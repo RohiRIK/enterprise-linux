@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Install default apps and browser policies for one profile into a root fs.
-#   desktop/apps/install-apps.sh --profile open-source|microsoft-365 --root DIR
-# Called by desktop/install.sh. Installing the browser packages themselves is
-# the job of the app bundles (catalog/), not this script.
+# Install the dock favorites for one catalog profile into a root fs.
+#   desktop/apps/install-apps.sh --profile <catalog profile> --root DIR
+# Called by desktop/install.sh. Apps, browser policies and default apps
+# (/etc/xdg/mimeapps.list) belong to scripts/apps/elapps; this script never
+# writes them.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="" profile=""
@@ -14,24 +15,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$root" ] || { echo "error: --root is required" >&2; exit 2; }
-pdir="$here/profiles/$profile"
-[ -n "$profile" ] && [ -d "$pdir" ] || {
-  echo "error: unknown profile '$profile' (have: $(ls "$here/profiles" | tr '\n' ' '))" >&2; exit 2; }
+src="$here/favorites/$profile.dconf"
+if [ -z "$profile" ] || [ ! -f "$src" ]; then
+  echo "error: no dock favorites for profile '$profile' (see desktop/apps/favorites/)" >&2
+  exit 2
+fi
 root="${root%/}"
-
-install -D -m 0644 "$pdir/mimeapps.list" "$root/etc/xdg/mimeapps.list"
-install -D -m 0644 "$pdir/favorites.dconf" "$root/etc/dconf/db/enterprise-linux.d/20-favorites"
-
-install -D -m 0644 "$here/browsers/firefox/policies.json" "$root/etc/firefox/policies/policies.json"
-install -D -m 0644 "$here/browsers/chrome/enterprise-linux.json" "$root/etc/opt/chrome/policies/managed/enterprise-linux.json"
-install -D -m 0644 "$here/browsers/edge/enterprise-linux.json" "$root/etc/opt/edge/policies/managed/enterprise-linux.json"
-install -D -m 0644 "$here/browsers/chromium/enterprise-linux.json" "$root/etc/chromium/policies/managed/enterprise-linux.json"
-
-# Profile overlays: edge-*.json / chrome-*.json land next to the baseline.
-for f in "$pdir"/edge-*.json; do
-  [ -e "$f" ] && install -D -m 0644 "$f" "$root/etc/opt/edge/policies/managed/$(basename "$f")"
-done
-for f in "$pdir"/chrome-*.json; do
-  [ -e "$f" ] && install -D -m 0644 "$f" "$root/etc/opt/chrome/policies/managed/$(basename "$f")"
-done
-echo "installed apps profile '$profile' into ${root:-/}"
+install -D -m 0644 "$src" "$root/etc/dconf/db/enterprise-linux.d/20-favorites"
+echo "installed dock favorites for profile '$profile' into ${root:-/}"
