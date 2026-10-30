@@ -29,7 +29,7 @@ for profile in default developer microsoft365 open-source; do
   printf 'user-db:user\nfile-db:%s\n' "$tmp/$profile.db" > "$tmp/profile"
   export DCONF_PROFILE="$tmp/profile"
   echo "== $profile: session"
-  expect org.gnome.desktop.session idle-delay false "uint32 600"
+  expect org.gnome.desktop.session idle-delay false "uint32 300"
   expect org.gnome.desktop.screensaver lock-enabled false true
   expect org.gnome.desktop.privacy usb-protection-level false "'lockscreen'"
   expect org.gnome.system.proxy mode false ""

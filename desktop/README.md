@@ -34,7 +34,7 @@ in `dconf/db/enterprise-linux.d/`, and `tests/validate-dconf.py` enforces it.
 
 | Tier | File | Locked? | What is in it |
 |---|---|---|---|
-| **Locked (org)** | `00-locked-security` | Yes, every key | Screen lock (on, 10 min, immediate), user accounts admin off, no notifications on lock screen, telemetry off, USB protection on lock screen, no autorun, remote desktop off, proxy, extension set (taskbar + tray), GNOME Software updates off |
+| **Locked (org)** | `00-locked-security` | Yes, every key | Screen lock (on, 5 min, immediate, on suspend), user accounts admin off, no notifications on lock screen, telemetry off, USB protection on lock screen, no autorun, remote desktop off, proxy, extension set (taskbar + tray), GNOME Software updates off |
 | **Org default** | `10-org-defaults` | No | Minimize/maximize buttons, no hot corner, weekday clock, battery %, US + Hebrew keyboards, location off, tap to click |
 | **Org default** | `20-favorites` (from `apps/`) | No | Dock favorites for the chosen profile |
 | **Org default** | `30-branding` | No | Wallpaper (light and dark), lock screen picture |
