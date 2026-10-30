@@ -1,0 +1,195 @@
+# Open-source office suite, mail and calendar for the enterprise-linux workstation.
+#
+# Status: design-stage manifest. Nothing here has been tested.
+#
+# Fields beyond catalog/README.md used in this file:
+#
+#   desktopFile:  a string, OR a map when the launcher id differs by install
+#                 method / family. Keys: native | flatpak | pwa | apt | dnf |
+#                 zypper | default (schema). The installer looks up the install
+#                 method first, then the family, then `default` — so a map that
+#                 differs per family must NOT also set `native`.
+#                   desktopFile: { native: libreoffice-startcenter.desktop,
+#                                  flatpak: org.libreoffice.LibreOffice.desktop }
+#   defaultFor:   optional list of MIME / URL-scheme associations written to
+#                 /etc/xdg/mimeapps.list [Default Applications] when this app is
+#                 the profile's default for one of its `provides` roles.
+#                 Each entry: { mime: <type>, desktopFile: <string or map as above> }
+#
+# Dictionaries / hyphenation / UI language packs (incl. Hebrew, e.g. LibreOffice
+# UI packs apt libreoffice-l10n-he / dnf libreoffice-langpack-he / zypper
+# libreoffice-l10n-he, plus the matching hunspell dictionaries) are NOT
+# in this bundle on purpose: they belong to the locale bundle, so one locale
+# choice drives spell-check for LibreOffice, Thunderbird and the browsers.
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: office-oss
+  version: 2026.10.0
+  owner: it-platform
+  description: >-
+    Open-source office: LibreOffice (default), ONLYOFFICE Desktop Editors
+    (higher OOXML layout fidelity), Thunderbird and Evolution with EWS for
+    Exchange / Microsoft 365 mail and calendar. Works fully offline.
+spec:
+  removable: true
+  includes: []
+  apps:
+    # ------------------------------------------------------------------ LibreOffice
+    - id: libreoffice
+      name: LibreOffice
+      category: office
+      license: MPL-2.0
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        Large document-parser attack surface (many legacy formats); macros are
+        locked to "very high" security by policy. RHEL 10 and its rebuilds no
+        longer ship LibreOffice packages: on those the dnf install fails and
+        the profile must prefer flatpak (installer fallback is not built yet).
+      provides: [office]
+      desktopFile:
+        native: libreoffice-startcenter.desktop
+        flatpak: org.libreoffice.LibreOffice.desktop
+      defaultFor:
+        # Word processing
+        - mime: application/vnd.openxmlformats-officedocument.wordprocessingml.document   # .docx
+          desktopFile: &lo_writer { native: libreoffice-writer.desktop, flatpak: org.libreoffice.LibreOffice.writer.desktop }
+        - mime: application/msword                                                         # .doc
+          desktopFile: *lo_writer
+        - mime: application/vnd.oasis.opendocument.text                                    # .odt
+          desktopFile: *lo_writer
+        - mime: application/rtf
+          desktopFile: *lo_writer
+        # Spreadsheets
+        - mime: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet         # .xlsx
+          desktopFile: &lo_calc { native: libreoffice-calc.desktop, flatpak: org.libreoffice.LibreOffice.calc.desktop }
+        - mime: application/vnd.ms-excel                                                   # .xls
+          desktopFile: *lo_calc
+        - mime: application/vnd.oasis.opendocument.spreadsheet                             # .ods
+          desktopFile: *lo_calc
+        - mime: text/csv
+          desktopFile: *lo_calc
+        # Presentations
+        - mime: application/vnd.openxmlformats-officedocument.presentationml.presentation # .pptx
+          desktopFile: &lo_impress { native: libreoffice-impress.desktop, flatpak: org.libreoffice.LibreOffice.impress.desktop }
+        - mime: application/vnd.ms-powerpoint                                              # .ppt
+          desktopFile: *lo_impress
+        - mime: application/vnd.oasis.opendocument.presentation                            # .odp
+          desktopFile: *lo_impress
+      install:
+        apt:
+          packages: [libreoffice-writer, libreoffice-calc, libreoffice-impress, libreoffice-gtk3]
+        dnf:
+          packages: [libreoffice-writer, libreoffice-calc, libreoffice-impress]
+        zypper:
+          packages: [libreoffice-writer, libreoffice-calc, libreoffice-impress, libreoffice-gtk3]
+        flatpak: { ref: org.libreoffice.LibreOffice, remote: curated }
+      policies:
+        # System-wide registry layer (macro security, default save format, ...).
+        # Native only: the Flatpak bundles its own /app tree, see policies/office/README.md.
+        - file: policies/office/libreoffice/enterprise-linux.xcd
+          dest:
+            apt: /usr/lib/libreoffice/share/registry/enterprise-linux.xcd
+            dnf: /usr/lib64/libreoffice/share/registry/enterprise-linux.xcd
+            zypper: /usr/lib64/libreoffice/share/registry/enterprise-linux.xcd
+          appliesTo: [native]
+
+    # ------------------------------------------------------------------ ONLYOFFICE
+    - id: onlyoffice-desktopeditors
+      name: ONLYOFFICE Desktop Editors
+      category: office
+      license: AGPL-3.0-only
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        Vendor-built binary (Ascensio System SIA). Strong OOXML layout fidelity,
+        weaker ODF. Bundles its own Chromium-based engine (CEF) that updates on
+        the vendor's schedule. No system-wide policy file shipped yet.
+      provides: [office]
+      desktopFile:
+        native: onlyoffice-desktopeditors.desktop
+        flatpak: org.onlyoffice.desktopeditors.desktop
+      defaultFor:
+        - mime: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+          desktopFile: &oo { native: onlyoffice-desktopeditors.desktop, flatpak: org.onlyoffice.desktopeditors.desktop }
+        - mime: application/msword
+          desktopFile: *oo
+        - mime: application/vnd.oasis.opendocument.text
+          desktopFile: *oo
+        - mime: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+          desktopFile: *oo
+        - mime: application/vnd.ms-excel
+          desktopFile: *oo
+        - mime: application/vnd.oasis.opendocument.spreadsheet
+          desktopFile: *oo
+        - mime: application/vnd.openxmlformats-officedocument.presentationml.presentation
+          desktopFile: *oo
+        - mime: application/vnd.ms-powerpoint
+          desktopFile: *oo
+        - mime: application/vnd.oasis.opendocument.presentation
+          desktopFile: *oo
+      install:
+        # Flatpak is the primary path. The native vendor repo is defined in
+        # catalog/repos/onlyoffice.yaml but its key fingerprint is not yet
+        # verified, so the native methods stay commented out until it is.
+        # apt:    { packages: [onlyoffice-desktopeditors], repo: onlyoffice }
+        # dnf:    { packages: [onlyoffice-desktopeditors], repo: onlyoffice }
+        # zypper: { packages: [onlyoffice-desktopeditors], repo: onlyoffice }
+        flatpak: { ref: org.onlyoffice.desktopeditors, remote: curated }
+
+    # ------------------------------------------------------------------ Thunderbird
+    - id: thunderbird
+      name: Thunderbird
+      category: mail
+      license: MPL-2.0
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        Mail client parses untrusted HTML mail; remote content off by default.
+        Microsoft 365 via IMAP/SMTP with OAuth2, or Exchange (EWS) support in
+        recent releases. On Ubuntu 24.04+ the `thunderbird` deb is a transitional
+        package to a Snap: prefer flatpak there (snap is not a catalog method).
+      provides: [mail, calendar]
+      desktopFile:
+        apt: thunderbird.desktop             # Debian/Ubuntu
+        dnf: mozilla-thunderbird.desktop     # verify on Fedora/RHEL
+        zypper: mozilla-thunderbird.desktop  # verify on openSUSE
+        flatpak: org.mozilla.Thunderbird.desktop   # verify: Flathub id may be net.thunderbird.Thunderbird
+      # Note: for roles the installer knows (mail, calendar) it uses its own
+      # MIME list and ignores defaultFor; these entries document intent and
+      # add message/rfc822 if the installer starts honouring them.
+      defaultFor:
+        - mime: x-scheme-handler/mailto
+          desktopFile: &tb { apt: thunderbird.desktop, dnf: mozilla-thunderbird.desktop, zypper: mozilla-thunderbird.desktop, flatpak: org.mozilla.Thunderbird.desktop }
+        - mime: message/rfc822          # .eml
+          desktopFile: *tb
+        - mime: text/calendar           # .ics
+          desktopFile: *tb
+      install:
+        # No apt method: on Ubuntu 24.04+ the `thunderbird` deb only installs the
+        # Snap, and apt cannot tell Ubuntu from Debian here, so apt hosts use Flatpak.
+        dnf:     { packages: [thunderbird] }
+        zypper:  { packages: [MozillaThunderbird] }
+        flatpak: { ref: org.mozilla.Thunderbird, remote: curated }   # verify ref
+
+    # ------------------------------------------------------------------ Evolution + EWS
+    - id: evolution
+      name: Evolution (with Exchange Web Services)
+      category: mail
+      license: LGPL-2.0-or-later   # verify exact SPDX id against upstream COPYING
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        Native GNOME mail/calendar/contacts client. evolution-ews talks to
+        Exchange / Microsoft 365 over EWS; Microsoft has announced EWS
+        retirement for Exchange Online (Microsoft Graph replaces it), so M365
+        tenants should plan around that date. On-prem Exchange keeps EWS.
+      provides: [mail, calendar]
+      desktopFile: org.gnome.Evolution.desktop
+      defaultFor:
+        - mime: x-scheme-handler/mailto
+          desktopFile: org.gnome.Evolution.desktop
+        - mime: text/calendar
+          desktopFile: org.gnome.Evolution.desktop
+      install:
+        apt:     { packages: [evolution, evolution-ews] }
+        dnf:     { packages: [evolution, evolution-ews] }
+        zypper:  { packages: [evolution, evolution-ews] }
+        flatpak: { ref: org.gnome.Evolution, remote: curated }   # Flathub build includes EWS: verify

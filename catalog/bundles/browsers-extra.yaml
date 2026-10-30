@@ -1,0 +1,85 @@
+# Extra browsers: opt-in, not in the default profile.
+# - Chromium has no deb in the Ubuntu archive (only a snap), and on RHEL it
+#   needs EPEL, so it cannot be a default on every family.
+# - Brave's repo signing key is not verified yet (catalog/repos/brave.yaml),
+#   so the installer refuses its repo until it is.
+# Policy layout is the same as the browsers bundle; see policies/browsers/README.md.
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: browsers-extra
+  version: 2026.10.0
+  owner: it-platform
+  description: Opt-in browsers (Chromium, Brave) with the same enterprise baseline policies.
+spec:
+  removable: true
+  includes: []
+  apps:
+
+    # -------------------------------------------------------------- Chromium
+    - id: chromium
+      name: Chromium
+      category: browser
+      license: BSD-3-Clause
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        Open source, distro-built. Update cadence depends on the distro's
+        security team. On Ubuntu the apt package `chromium-browser` only
+        installs the snap; there is no deb in the Ubuntu archive. On Ubuntu
+        use the Flatpak (no managed policy) or a different browser. The snap
+        reads /etc/chromium-browser/policies/managed/, which we also write so
+        an existing snap install is still managed.
+      provides: [browser]
+      # Debian chromium -> chromium.desktop; Fedora/openSUSE -> chromium-browser.desktop  # verify openSUSE
+      desktopFile:
+        default: chromium-browser.desktop
+        apt: chromium.desktop
+        flatpak: org.chromium.Chromium.desktop
+      install:
+        apt:     { packages: [chromium] }      # Debian only; Ubuntu has no deb (snap). See risk.
+        dnf:     { packages: [chromium] }      # Fedora; on RHEL needs EPEL (not an allowed repo yet)  # verify
+        zypper:  { packages: [chromium] }
+        flatpak: { ref: org.chromium.Chromium, remote: curated }  # no managed policy
+      policies:
+        - file: policies/browsers/chromium-common/10-baseline.json
+          dest: /etc/chromium/policies/managed/10-enterprise-linux-baseline.json
+          appliesTo: [native]
+        - file: policies/browsers/chromium/20-chromium.json
+          dest: /etc/chromium/policies/managed/20-enterprise-linux-chromium.json
+          appliesTo: [native]
+        # Ubuntu snap Chromium path. The map has only an `apt` key: on other
+        # families there is no default, so the entry is skipped.
+        - file: policies/browsers/chromium-common/10-baseline.json
+          dest: { apt: /etc/chromium-browser/policies/managed/10-enterprise-linux-baseline.json }
+          appliesTo: [native]
+        - file: policies/browsers/chromium/20-chromium.json
+          dest: { apt: /etc/chromium-browser/policies/managed/20-enterprise-linux-chromium.json }
+          appliesTo: [native]
+
+    # ----------------------------------------------------------------- Brave
+    - id: brave
+      name: Brave Browser
+      category: browser
+      license: MPL-2.0
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: >-
+        OPTIONAL, higher risk. Third-party vendor repo outside the big three
+        vendors; ships crypto wallet, rewards, VPN, AI chat and Tor windows
+        that we must switch off by policy (20-brave.json). Brave policy names
+        change between releases more often than Chrome's. Signing-key
+        fingerprint not yet verified (catalog/repos/brave.yaml). Flathub
+        com.brave.Browser is community-maintained; no managed policy.
+      provides: [browser]
+      desktopFile: brave-browser.desktop
+      install:
+        apt:     { packages: [brave-browser], repo: brave }
+        dnf:     { packages: [brave-browser], repo: brave }
+        zypper:  { packages: [brave-browser], repo: brave }
+        flatpak: { ref: com.brave.Browser, remote: curated }    # no managed policy
+      policies:
+        - file: policies/browsers/chromium-common/10-baseline.json
+          dest: /etc/brave/policies/managed/10-enterprise-linux-baseline.json
+          appliesTo: [native]
+        - file: policies/browsers/brave/20-brave.json
+          dest: /etc/brave/policies/managed/20-enterprise-linux-brave.json
+          appliesTo: [native]

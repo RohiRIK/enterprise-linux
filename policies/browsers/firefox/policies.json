@@ -1,0 +1,76 @@
+{
+  "policies": {
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DisablePocket": true,
+    "DisableFirefoxAccounts": true,
+    "DontCheckDefaultBrowser": true,
+    "DisableAppUpdate": true,
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": "",
+
+    "PasswordManagerEnabled": false,
+    "OfferToSaveLogins": false,
+    "AutofillCreditCardEnabled": false,
+    "PromptForDownloadLocation": true,
+
+    "Homepage": {
+      "URL": "{{ homepage }}",
+      "Locked": true,
+      "StartPage": "homepage-locked"
+    },
+
+    "ExtensionSettings": {
+      "*": {
+        "installation_mode": "blocked",
+        "blocked_install_message": "Extensions are managed by IT. Request one through the service desk."
+      }
+    },
+
+    "DNSOverHTTPS": {
+      "Enabled": false,
+      "Locked": true
+    },
+    "HttpsOnlyMode": "enabled",
+    "EnableTrackingProtection": {
+      "Value": true,
+      "Locked": false,
+      "Cryptomining": true,
+      "Fingerprinting": true
+    },
+
+    "Authentication": {
+      "SPNEGO": ["{{ auth_server_allowlist }}"],
+      "AllowNonFQDN": {
+        "SPNEGO": false,
+        "NTLM": false
+      },
+      "Locked": true
+    },
+    "Certificates": {
+      "ImportEnterpriseRoots": true
+    },
+
+    "UserMessaging": {
+      "ExtensionRecommendations": false,
+      "FeatureRecommendations": false,
+      "UrlbarInterventions": false,
+      "SkipOnboarding": true,
+      "MoreFromMozilla": false,
+      "FirefoxLabs": false,
+      "Locked": true
+    },
+    "FirefoxHome": {
+      "SponsoredTopSites": false,
+      "Pocket": false,
+      "SponsoredPocket": false,
+      "Snippets": false,
+      "Locked": true
+    },
+    "FirefoxSuggest": {
+      "SponsoredSuggestions": false,
+      "ImproveSuggest": false,
+      "Locked": true
+    }
+  }
+}

@@ -1,0 +1,21 @@
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: accessibility
+  version: 2026.10.0
+  owner: it-platform
+  description: Assistive technology - screen reader and speech synthesis. Always available per user.
+spec:
+  removable: true
+  includes: [core]
+  apps:
+    - id: orca
+      name: Orca screen reader
+      category: accessibility
+      license: LGPL-2.1-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low.
+      install:
+        apt:    { packages: [orca, espeak-ng] }
+        dnf:    { packages: [orca, espeak-ng] }
+        zypper: { packages: [orca, espeak-ng] }

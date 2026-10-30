@@ -34,6 +34,8 @@ All of these are defined once in [CONTROL-API.md](CONTROL-API.md); each MDM gets
 
 Sources and detail: [RESEARCH-ENTERPRISE-DISTROS.md](RESEARCH-ENTERPRISE-DISTROS.md).
 
+**Our own agent:** one `el-agent` with per-MDM connectors (Intune, Fleet, Landscape, Satellite, git/https-pull), including how Intune's bash-script and custom-compliance channels can carry our signed policies and facts: [AGENT.md](AGENT.md).
+
 **Likely shape for v1:** Intune for **compliance + conditional access** (because customers already own it) **plus** one policy/config channel (Fleet, Landscape, or Satellite depending on substrate) — both talking to the same Control API.
 
 ## EDR

@@ -1,0 +1,580 @@
+#!/usr/bin/env python3
+"""elapps - validate, plan, and apply curated app bundles.
+
+Reference implementation for the catalog format in catalog/README.md.
+Needs only Python 3.9+ and PyYAML (python3-yaml / python3-pyyaml), which every
+supported package family ships. jsonschema is used for `validate` when present.
+
+  elapps validate
+  elapps list
+  elapps plan  --profile default [--family apt|dnf|zypper]
+  elapps apply --profile default [--root DIR] [--files-only] [--dry-run]
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - depends on host
+    sys.exit("elapps: PyYAML is required (apt: python3-yaml, dnf: python3-pyyaml, zypper: python3-PyYAML)")
+
+REPO = Path(__file__).resolve().parents[2]
+CATALOG = REPO / "catalog"
+API_VERSION = "enterprise-linux/v1"
+FAMILIES = ("apt", "dnf", "zypper")
+METHODS = ("native", "flatpak", "pwa")
+PLACEHOLDER = re.compile(r"\{\{\s*([a-z0-9_]+)\s*\}\}")
+STATE_FILE = "var/lib/enterprise-linux/apps/state.json"
+MIMEAPPS = "etc/xdg/mimeapps.list"
+MIME_BEGIN = "# BEGIN enterprise-linux managed defaults"
+MIME_END = "# END enterprise-linux managed defaults"
+
+# MIME types a default-app role claims when the app does not list its own `defaultFor`.
+ROLE_MIME = {
+    "browser": ["text/html", "application/xhtml+xml", "x-scheme-handler/http", "x-scheme-handler/https"],
+    "mail": ["x-scheme-handler/mailto"],
+    "calendar": ["text/calendar"],
+    "pdf": ["application/pdf"],
+    "image": ["image/png", "image/jpeg", "image/gif", "image/webp"],
+    "archive": ["application/zip", "application/x-tar", "application/x-7z-compressed"],
+}
+
+# Until our own mirrored Flatpak remote exists, `curated` resolves to Flathub (pinned refs only).
+FLATPAK_REMOTES = {
+    "curated": ("flathub", "https://dl.flathub.org/repo/flathub.flatpakrepo"),
+    "flathub": ("flathub", "https://dl.flathub.org/repo/flathub.flatpakrepo"),
+}
+
+
+class CatalogError(Exception):
+    pass
+
+
+# --------------------------------------------------------------------------- loading
+
+
+def load_kind(subdir: str, kind: str) -> dict[str, dict]:
+    docs = {}
+    for path in sorted((CATALOG / subdir).glob("*.yaml")):
+        with path.open(encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh)
+        if not isinstance(doc, dict):
+            raise CatalogError(f"{path.relative_to(REPO)}: not a mapping")
+        doc["_path"] = path
+        if doc.get("kind") != kind:
+            raise CatalogError(f"{path.relative_to(REPO)}: kind must be {kind}")
+        docs[path.stem] = doc
+    return docs
+
+
+def load_catalog() -> dict[str, dict[str, dict]]:
+    return {
+        "bundles": load_kind("bundles", "AppBundle"),
+        "repos": load_kind("repos", "VendorRepo"),
+        "profiles": load_kind("profiles", "BundleProfile"),
+    }
+
+
+# --------------------------------------------------------------------------- validation
+
+
+def schema_errors(cat) -> list[str]:
+    try:
+        import jsonschema
+    except ImportError:
+        return []
+    errors = []
+    for group, schema_name in (("bundles", "appbundle"), ("repos", "vendorrepo"), ("profiles", "bundleprofile")):
+        schema = json.loads((CATALOG / "schema" / f"{schema_name}.schema.json").read_text(encoding="utf-8"))
+        validator = jsonschema.Draft202012Validator(schema)
+        for doc in cat[group].values():
+            data = {k: v for k, v in doc.items() if k != "_path"}
+            for err in validator.iter_errors(json.loads(json.dumps(data, default=str))):
+                where = "/".join(str(p) for p in err.absolute_path) or "(root)"
+                errors.append(f"{doc['_path'].relative_to(REPO)}: {where}: {err.message}")
+    return errors
+
+
+def known_placeholders(cat) -> set[str]:
+    names = set()
+    for prof in cat["profiles"].values():
+        names.update((prof.get("spec", {}).get("settings") or {}).keys())
+    return names
+
+
+def policy_placeholders(path: Path) -> set[str]:
+    return set(PLACEHOLDER.findall(path.read_text(encoding="utf-8")))
+
+
+def validate(cat) -> list[str]:
+    errors = schema_errors(cat)
+    bundles, repos, profiles = cat["bundles"], cat["repos"], cat["profiles"]
+    app_owner: dict[str, str] = {}
+    all_apps: dict[str, dict] = {}
+    settings_keys = known_placeholders(cat)
+
+    for name, doc in {**bundles, **repos, **profiles}.items():
+        rel = doc["_path"].relative_to(REPO)
+        if doc.get("apiVersion") != API_VERSION:
+            errors.append(f"{rel}: apiVersion must be {API_VERSION}")
+        if (doc.get("metadata") or {}).get("name") != name:
+            errors.append(f"{rel}: metadata.name must equal the file name '{name}'")
+
+    for name, doc in bundles.items():
+        rel = doc["_path"].relative_to(REPO)
+        spec = doc.get("spec") or {}
+        for inc in spec.get("includes") or []:
+            if inc not in bundles:
+                errors.append(f"{rel}: includes unknown bundle '{inc}'")
+        for app in spec.get("apps") or []:
+            aid = app.get("id")
+            if aid in app_owner:
+                errors.append(f"{rel}: app '{aid}' already defined in bundle '{app_owner[aid]}'")
+            app_owner[aid] = name
+            all_apps[aid] = app
+            install = app.get("install") or {}
+            if not install:
+                errors.append(f"{rel}: app '{aid}' has no install method")
+            for fam in FAMILIES:
+                repo = (install.get(fam) or {}).get("repo")
+                if repo and repo not in repos:
+                    errors.append(f"{rel}: app '{aid}' uses unknown repo '{repo}'")
+            if app.get("provides") and not app.get("desktopFile") and not app.get("defaultFor"):
+                errors.append(f"{rel}: app '{aid}' provides a role but has no desktopFile")
+            for pol in app.get("policies") or []:
+                src = REPO / pol.get("file", "")
+                if not src.is_file():
+                    errors.append(f"{rel}: app '{aid}' policy file missing: {pol.get('file')}")
+                    continue
+                if src.suffix == ".json":
+                    try:
+                        json.loads(src.read_text(encoding="utf-8"))
+                    except json.JSONDecodeError as exc:
+                        errors.append(f"{pol['file']}: invalid JSON: {exc}")
+                for ph in sorted(policy_placeholders(src) - settings_keys):
+                    errors.append(f"{pol['file']}: placeholder '{ph}' is not defined in any profile settings")
+                if not pol.get("dest"):
+                    errors.append(f"{rel}: app '{aid}' policy {pol['file']} has no dest")
+        try:
+            expand_bundles(bundles, [name])
+        except CatalogError as exc:
+            errors.append(f"{rel}: {exc}")
+
+    for name, doc in profiles.items():
+        rel = doc["_path"].relative_to(REPO)
+        spec = doc.get("spec") or {}
+        for b in spec.get("bundles") or []:
+            if b not in bundles:
+                errors.append(f"{rel}: unknown bundle '{b}'")
+                continue
+        try:
+            selected = {a["id"] for a in profile_apps(cat, name)}
+        except CatalogError as exc:
+            errors.append(f"{rel}: {exc}")
+            continue
+        for role, aid in (spec.get("defaults") or {}).items():
+            if aid not in all_apps:
+                errors.append(f"{rel}: default {role} '{aid}' is not a catalog app")
+            elif aid not in selected:
+                errors.append(f"{rel}: default {role} '{aid}' is not in the profile's bundles")
+            elif role not in (all_apps[aid].get("provides") or []):
+                errors.append(f"{rel}: app '{aid}' does not provide role '{role}'")
+        for aid in selected:
+            for fam in FAMILIES:
+                repo = ((all_apps[aid].get("install") or {}).get(fam) or {}).get("repo")
+                if repo in repos and not re.fullmatch(r"[0-9A-F]{40}", repos[repo]["spec"]["key"].get("fingerprint") or ""):
+                    errors.append(f"{rel}: app '{aid}' needs repo '{repo}', whose key fingerprint is not verified")
+            pwa = (all_apps[aid].get("install") or {}).get("pwa")
+            if pwa and pwa.get("browser") not in selected:
+                errors.append(f"{rel}: web app '{aid}' needs browser '{pwa.get('browser')}', which is not selected")
+    return errors
+
+
+# --------------------------------------------------------------------------- resolution
+
+
+def expand_bundles(bundles, names, stack=None, out=None) -> list[str]:
+    stack = stack or []
+    out = out if out is not None else []
+    for name in names:
+        if name in stack:
+            raise CatalogError("bundle include cycle: " + " -> ".join(stack + [name]))
+        if name not in bundles:
+            raise CatalogError(f"unknown bundle '{name}'")
+        expand_bundles(bundles, (bundles[name].get("spec") or {}).get("includes") or [], stack + [name], out)
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def profile_apps(cat, profile: str) -> list[dict]:
+    if profile not in cat["profiles"]:
+        raise CatalogError(f"unknown profile '{profile}'")
+    names = expand_bundles(cat["bundles"], (cat["profiles"][profile].get("spec") or {}).get("bundles") or [])
+    apps, seen = [], set()
+    for name in names:
+        for app in (cat["bundles"][name].get("spec") or {}).get("apps") or []:
+            if app["id"] not in seen:
+                seen.add(app["id"])
+                apps.append(dict(app, _bundle=name))
+    return apps
+
+
+def detect_family() -> str:
+    ids = set()
+    try:
+        for line in Path("/etc/os-release").read_text(encoding="utf-8").splitlines():
+            key, _, val = line.partition("=")
+            if key in ("ID", "ID_LIKE"):
+                ids.update(val.strip().strip('"').lower().split())
+    except OSError:
+        pass
+    if ids & {"debian", "ubuntu"}:
+        return "apt"
+    if ids & {"rhel", "fedora", "centos", "rocky", "almalinux"}:
+        return "dnf"
+    if ids & {"suse", "opensuse", "sles", "opensuse-leap", "opensuse-tumbleweed"}:
+        return "zypper"
+    for fam, tool in (("apt", "apt-get"), ("dnf", "dnf"), ("zypper", "zypper")):
+        if shutil.which(tool):
+            return fam
+    raise CatalogError("cannot detect package family; pass --family")
+
+
+def pick_method(app: dict, family: str, prefer: list[str]) -> tuple[str, dict] | None:
+    install = app.get("install") or {}
+    for method in prefer:
+        key = family if method == "native" else method
+        if install.get(key):
+            return method, install[key]
+    return None
+
+
+def resolve_desktop(app: dict, method: str, family: str, value=None) -> str | None:
+    value = app.get("desktopFile") if value is None else value
+    if isinstance(value, dict):
+        value = value.get(method) or value.get(family) or value.get("default")
+    if not value and method == "flatpak":
+        ref = (app.get("install") or {}).get("flatpak", {}).get("ref")
+        value = f"{ref}.desktop" if ref else None
+    return value
+
+
+def resolve_dest(dest, family: str) -> str | None:
+    if isinstance(dest, dict):
+        return dest.get(family) or dest.get("default")
+    return dest
+
+
+def build_plan(cat, profile: str, family: str) -> dict:
+    spec = cat["profiles"][profile].get("spec") or {}
+    prefer = spec.get("prefer") or list(METHODS)
+    plan = {"profile": profile, "family": family, "repos": [], "packages": [], "flatpaks": [],
+            "webapps": [], "policies": [], "defaults": {}, "skipped": [], "apps": []}
+    chosen: dict[str, str] = {}
+    for app in profile_apps(cat, profile):
+        picked = pick_method(app, family, prefer)
+        if not picked:
+            plan["skipped"].append({"id": app["id"], "reason": f"no install method for {family} in {prefer}"})
+            continue
+        method, how = picked
+        chosen[app["id"]] = method
+        plan["apps"].append({"id": app["id"], "bundle": app["_bundle"], "method": method})
+        if method == "native":
+            if how.get("repo") and how["repo"] not in plan["repos"]:
+                plan["repos"].append(how["repo"])
+            plan["packages"].extend(p for p in how.get("packages") or [] if p not in plan["packages"])
+        elif method == "flatpak":
+            plan["flatpaks"].append({"id": app["id"], "ref": how["ref"], "remote": how.get("remote", "curated")})
+        else:
+            plan["webapps"].append({"id": app["id"], "url": how.get("url"), "browser": how.get("browser")})
+        for pol in app.get("policies") or []:
+            applies = pol.get("appliesTo")
+            if applies and method not in applies:
+                continue
+            dest = resolve_dest(pol.get("dest"), family)
+            if dest:
+                plan["policies"].append({"app": app["id"], "file": pol["file"], "dest": dest})
+
+    apps = {a["id"]: a for a in profile_apps(cat, profile)}
+    for role, aid in (spec.get("defaults") or {}).items():
+        if aid not in chosen:
+            plan["skipped"].append({"id": aid, "reason": f"default {role} not installable on {family}"})
+            continue
+        app, method = apps[aid], chosen[aid]
+        entries = app.get("defaultFor")
+        if entries:
+            for entry in entries:
+                desktop = resolve_desktop(app, method, family, entry.get("desktopFile"))
+                plan["defaults"][entry["mime"]] = desktop
+        else:
+            desktop = resolve_desktop(app, method, family)
+            for mime in ROLE_MIME.get(role, []):
+                plan["defaults"][mime] = desktop
+    return plan
+
+
+# --------------------------------------------------------------------------- rendering
+
+
+_DROP = object()
+
+
+def render_value(value, settings: dict):
+    """Render placeholders. A string that uses an empty setting is dropped, with its key or list slot,
+    so ".*@{{ m365_tenant_domain }}" never renders to a pattern that matches any account."""
+    if isinstance(value, str):
+        if any(settings.get(name) in ("", None, []) for name in PLACEHOLDER.findall(value)):
+            return _DROP
+        whole = PLACEHOLDER.fullmatch(value.strip())
+        if whole and not isinstance(settings.get(whole.group(1)), str):
+            return copy.deepcopy(settings[whole.group(1)])
+        return PLACEHOLDER.sub(lambda m: str(settings[m.group(1)]), value)
+    if isinstance(value, list):
+        return [v for v in (render_value(x, settings) for x in value) if v is not _DROP]
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            r = render_value(v, settings)
+            if r is not _DROP:
+                out[k] = r
+        return out
+    return value
+
+
+def render_file(src: Path, settings: dict) -> str:
+    missing = policy_placeholders(src) - settings.keys()
+    if missing:
+        raise CatalogError(f"{src.relative_to(REPO)}: no setting for {sorted(missing)}")
+    if src.suffix == ".json":
+        data = render_value(json.loads(src.read_text(encoding="utf-8")), settings)
+        return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    return PLACEHOLDER.sub(lambda m: str(settings[m.group(1)]), src.read_text(encoding="utf-8"))
+
+
+def merge_mimeapps(existing: str, defaults: dict) -> str:
+    """Put our defaults at the top of [Default Applications], between markers.
+
+    Keys the org sets elsewhere in the file are kept unless we manage the same MIME type,
+    and other groups ([Added Associations], ...) are left alone.
+    """
+    managed = re.compile(re.escape(MIME_BEGIN) + r".*?" + re.escape(MIME_END) + r"\n?", re.S)
+    lines = managed.sub("", existing).splitlines()
+    ours = [MIME_BEGIN] + [f"{m}={d}" for m, d in sorted(defaults.items()) if d] + [MIME_END]
+    if "[Default Applications]" not in (line.strip() for line in lines):
+        lines = ["[Default Applications]"] + ([""] if lines else []) + lines
+    out, group = [], None
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            group = stripped
+            out.append(line)
+            if group == "[Default Applications]":
+                out.extend(ours)
+            continue
+        if group == "[Default Applications]" and stripped.split("=", 1)[0].strip() in defaults:
+            continue
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+# --------------------------------------------------------------------------- apply
+
+
+class Runner:
+    def __init__(self, dry_run: bool):
+        self.dry_run = dry_run
+
+    def run(self, cmd: list[str]):
+        print("+ " + " ".join(cmd))
+        if not self.dry_run:
+            subprocess.run(cmd, check=True)
+
+    def write(self, path: Path, text: str, mode=0o644):
+        print(f"+ write {path}")
+        if self.dry_run:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+
+
+def fetch_key(url: str, fingerprint: str) -> bytes:
+    if not re.fullmatch(r"[0-9A-F]{40}", fingerprint or ""):
+        raise CatalogError(f"refusing key {url}: fingerprint is not a verified 40-hex value")
+    with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310 - https URLs from reviewed catalog
+        data = resp.read()
+    with tempfile.NamedTemporaryFile() as tmp:
+        tmp.write(data)
+        tmp.flush()
+        out = subprocess.run(["gpg", "--show-keys", "--with-colons", tmp.name],
+                             check=True, capture_output=True, text=True).stdout
+    fprs = {line.split(":")[9] for line in out.splitlines() if line.startswith("fpr:")}
+    if fingerprint not in fprs:
+        raise CatalogError(f"key at {url} does not match fingerprint {fingerprint}")
+    return data
+
+
+def add_repo(run: Runner, root: Path, family: str, name: str, repo: dict):
+    spec = repo["spec"]
+    fam = spec.get(family)
+    if not fam:
+        raise CatalogError(f"repo '{name}' has no {family} definition")
+    if not re.fullmatch(r"[0-9A-F]{40}", spec["key"].get("fingerprint") or ""):
+        raise CatalogError(f"repo '{name}': signing-key fingerprint is not verified yet")
+    key = fetch_key(spec["key"]["url"], spec["key"]["fingerprint"]) if not run.dry_run else b""
+    if family == "apt":
+        keyfile = root / f"etc/apt/keyrings/{name}.asc"
+        print(f"+ write {keyfile}")
+        if not run.dry_run:
+            keyfile.parent.mkdir(parents=True, exist_ok=True)
+            keyfile.write_bytes(key)
+        sources = (f"Types: deb\nURIs: {fam['uri']}\nSuites: {fam['suite']}\n"
+                   f"Components: {' '.join(fam.get('components') or [])}\n"
+                   f"Architectures: {' '.join(fam.get('architectures') or ['amd64'])}\n"
+                   f"Signed-By: /etc/apt/keyrings/{name}.asc\n")
+        run.write(root / f"etc/apt/sources.list.d/{name}.sources", sources)
+    else:
+        keyfile = root / f"etc/pki/rpm-gpg/RPM-GPG-KEY-{name}"
+        print(f"+ write {keyfile}")
+        if not run.dry_run:
+            keyfile.parent.mkdir(parents=True, exist_ok=True)
+            keyfile.write_bytes(key)
+        repo_dir = "etc/yum.repos.d" if family == "dnf" else "etc/zypp/repos.d"
+        text = (f"[{name}]\nname={name}\nbaseurl={fam['baseurl']}\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\n"
+                f"gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-{name}\n")
+        run.write(root / repo_dir / f"{name}.repo", text)
+        run.run(["rpm", "--root", str(root), "--import", str(keyfile)] if str(root) != "/" else ["rpm", "--import", str(keyfile)])
+
+
+def apply(cat, args) -> int:
+    family = args.family or detect_family()
+    plan = build_plan(cat, args.profile, family)
+    settings = (cat["profiles"][args.profile].get("spec") or {}).get("settings") or {}
+    root = Path(args.root)
+    run = Runner(args.dry_run)
+    staging = args.files_only and root != Path("/")
+    if not args.dry_run and not staging and os.geteuid() != 0:
+        raise CatalogError("apply needs root (or use --dry-run, or --files-only with --root)")
+
+    if not args.files_only:
+        for name in plan["repos"]:
+            add_repo(run, root, family, name, cat["repos"][name])
+        if plan["packages"]:
+            cmd = {"apt": ["apt-get", "install", "-y", "--no-install-recommends"],
+                   "dnf": ["dnf", "install", "-y"],
+                   "zypper": ["zypper", "--non-interactive", "install", "--no-recommends"]}[family]
+            if family == "apt":
+                run.run(["apt-get", "update"])
+            run.run(cmd + plan["packages"])
+        remotes = {FLATPAK_REMOTES.get(f["remote"], (f["remote"], None)) for f in plan["flatpaks"]}
+        for remote, url in sorted(r for r in remotes if r[1]):
+            run.run(["flatpak", "remote-add", "--system", "--if-not-exists", remote, url])
+        for fp in plan["flatpaks"]:
+            remote = FLATPAK_REMOTES.get(fp["remote"], (fp["remote"], None))[0]
+            run.run(["flatpak", "install", "--system", "--noninteractive", "-y", remote, fp["ref"]])
+
+    written = []
+    for pol in plan["policies"]:
+        dest = root / pol["dest"].lstrip("/")
+        run.write(dest, render_file(REPO / pol["file"], settings))
+        written.append(pol["dest"])
+
+    if plan["defaults"]:
+        target = root / MIMEAPPS
+        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        run.write(target, merge_mimeapps(existing, plan["defaults"]))
+
+    state = {"profile": args.profile, "family": family, "apps": plan["apps"], "files": written,
+             "skipped": plan["skipped"]}
+    run.write(root / STATE_FILE, json.dumps(state, indent=2) + "\n")
+    for s in plan["skipped"]:
+        print(f"! skipped {s['id']}: {s['reason']}", file=sys.stderr)
+    return 0
+
+
+# --------------------------------------------------------------------------- CLI
+
+
+def cmd_validate(cat, _args) -> int:
+    errors = list(dict.fromkeys(validate(cat)))
+    for e in errors:
+        print(f"error: {e}", file=sys.stderr)
+    counts = {k: len(v) for k, v in cat.items()}
+    if not errors:
+        print(f"ok: {counts['bundles']} bundles, {counts['repos']} repos, {counts['profiles']} profiles")
+    return 1 if errors else 0
+
+
+def cmd_list(cat, _args) -> int:
+    for name, doc in cat["bundles"].items():
+        spec = doc.get("spec") or {}
+        inc = f" (includes {', '.join(spec['includes'])})" if spec.get("includes") else ""
+        print(f"{name} {doc['metadata'].get('version', '')}{inc} - {doc['metadata'].get('description', '')}")
+        for app in spec.get("apps") or []:
+            methods = ",".join(k for k in (app.get("install") or {}))
+            print(f"  {app['id']:<28} {app.get('name', ''):<34} [{methods}]")
+    return 0
+
+
+def cmd_plan(cat, args) -> int:
+    plan = build_plan(cat, args.profile, args.family or detect_family())
+    if args.json:
+        print(json.dumps(plan, indent=2))
+        return 0
+    print(f"profile {plan['profile']} on {plan['family']}")
+    print(f"vendor repos : {', '.join(plan['repos']) or '-'}")
+    print(f"packages     : {' '.join(plan['packages']) or '-'}")
+    print(f"flatpaks     : {' '.join(f['ref'] for f in plan['flatpaks']) or '-'}")
+    print(f"web apps     : {', '.join(w['id'] for w in plan['webapps']) or '-'}")
+    print("policies     :")
+    for p in plan["policies"]:
+        print(f"  {p['file']} -> {p['dest']}")
+    print("defaults     :")
+    for mime, desktop in sorted(plan["defaults"].items()):
+        print(f"  {mime} = {desktop}")
+    for s in plan["skipped"]:
+        print(f"skipped      : {s['id']} ({s['reason']})")
+    return 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(prog="elapps", description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("validate", help="check manifests, references, and policy files")
+    sub.add_parser("list", help="list bundles and apps")
+    for name in ("plan", "apply"):
+        p = sub.add_parser(name)
+        p.add_argument("--profile", default="default")
+        p.add_argument("--family", choices=FAMILIES, help="override package-family detection")
+        if name == "plan":
+            p.add_argument("--json", action="store_true")
+        else:
+            p.add_argument("--root", default="/", help="target root, e.g. an image build chroot")
+            p.add_argument("--files-only", action="store_true", help="only write policies, defaults, state")
+            p.add_argument("--dry-run", action="store_true", help="print actions, change nothing")
+    args = parser.parse_args(argv)
+    try:
+        cat = load_catalog()
+        return {"validate": cmd_validate, "list": cmd_list, "plan": cmd_plan, "apply": apply}[args.cmd](cat, args)
+    except (CatalogError, subprocess.CalledProcessError, OSError) as exc:
+        print(f"elapps: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,18 @@
+# Microsoft-first profile: M365 web apps only, no local office suite.
+apiVersion: enterprise-linux/v1
+kind: BundleProfile
+metadata:
+  name: microsoft365
+  description: Cloud-first - Microsoft 365 web apps in Edge, no local office suite.
+spec:
+  prefer: [native, flatpak, pwa]
+  bundles: [core, base, browsers, office-microsoft365, accessibility]
+  defaults:
+    browser: microsoft-edge
+    pdf: evince
+    image: loupe
+    archive: file-roller
+  settings:
+    homepage: https://www.office.com/
+    m365_tenant_domain: ""
+    auth_server_allowlist: ""

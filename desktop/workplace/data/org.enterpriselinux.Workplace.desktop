@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Workplace
+GenericName=IT Self-Service
+Comment=Device status, apps, updates, access requests and IT help
+Exec=workplace
+Icon=org.enterpriselinux.Workplace
+Terminal=false
+Categories=Settings;
+Keywords=IT;help;support;apps;updates;admin;compliance;
+StartupNotify=true
+DBusActivatable=false
