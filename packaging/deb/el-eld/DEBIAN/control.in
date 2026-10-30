@@ -1,0 +1,12 @@
+Package: el-eld
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: enterprise-linux <https://github.com/RohiRIK/enterprise-linux>
+Installed-Size: @SIZE@
+Depends: libc6, systemd
+Section: admin
+Priority: optional
+Homepage: https://github.com/RohiRIK/enterprise-linux
+Description: enterprise-linux control daemon (eld) and CLI (elctl)
+ Local control API for facts, policy, actions, roles and audit over a Unix
+ socket. v0 prototype: most settings are recorded but not enforced yet.

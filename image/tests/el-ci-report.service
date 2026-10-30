@@ -1,0 +1,11 @@
+[Unit]
+Description=enterprise-linux CI boot report (test images only)
+After=multi-user.target eld.service
+Wants=eld.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/el/el-ci-report
+
+[Install]
+WantedBy=multi-user.target

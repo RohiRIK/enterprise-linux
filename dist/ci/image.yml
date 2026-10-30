@@ -1,0 +1,74 @@
+# Copy to .github/workflows/image.yml to enable CI (the automation that opened
+# this PR may not push workflow files).
+#
+# Builds the enterprise-linux installer ISO from the official Ubuntu 26.04
+# desktop ISO, installs it unattended into a VM with Secure Boot (Microsoft
+# keys, like a real laptop) and a software TPM, boots the installed disk and
+# checks the first-boot report. See image/README.md.
+name: image
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [image/**, packaging/**, security/**, desktop/**, catalog/**, crates/**, .github/workflows/image.yml]
+
+permissions:
+  contents: read
+
+env:
+  UBUNTU_ISO: ubuntu-26.04.1-desktop-amd64.iso
+  UBUNTU_URL: https://releases.ubuntu.com/26.04
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-yaml shellcheck
+      - name: Image unit tests
+        run: python3 -m unittest discover -s image/tests -v
+      - name: Shellcheck
+        run: shellcheck -x image/build-iso.sh image/late/el-install-target image/uki/el-build-uki image/uki/zz-el-uki image/tests/el-ci-report packaging/deb/build-eld-deb.sh
+
+  vm:
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xorriso qemu-system-x86 qemu-utils ovmf swtpm python3-yaml
+      - name: Base ISO (cached)
+        id: iso
+        uses: actions/cache@v4
+        with:
+          path: iso/${{ env.UBUNTU_ISO }}
+          key: ${{ env.UBUNTU_ISO }}
+      - name: Download base ISO
+        if: steps.iso.outputs.cache-hit != 'true'
+        run: mkdir -p iso && curl -fsSL -o "iso/$UBUNTU_ISO" "$UBUNTU_URL/$UBUNTU_ISO"
+      - name: Verify base ISO
+        run: curl -fsSL -o iso/SHA256SUMS "$UBUNTU_URL/SHA256SUMS" && (cd iso && sha256sum -c --ignore-missing SHA256SUMS)
+      - name: Build eld package
+        run: packaging/deb/build-eld-deb.sh --out out
+      - name: Build test ISO
+        run: |
+          image/build-iso.sh --base-iso "iso/$UBUNTU_ISO" --sha256sums iso/SHA256SUMS \
+            --deb out/el-eld_*.deb --out out --unattended --test-identity --serial
+      - name: Install and boot in a VM
+        run: image/tests/vm-test.sh --iso out/enterprise-linux-*-ci.iso --work vm
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-logs
+          path: vm/*.log

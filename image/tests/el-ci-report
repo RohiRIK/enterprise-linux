@@ -1,0 +1,23 @@
+#!/bin/sh
+# el-ci-report - first boot of a CI-installed VM: print what the image looks
+# like to the serial console between markers, then power off. Installed only
+# by `el-install-target --ci-report` (image/build-iso.sh --test-identity).
+out=/dev/ttyS0
+[ -w "$out" ] || out=/dev/console
+{
+  echo "EL-CI-REPORT-BEGIN"
+  echo "kernel: $(uname -r)"
+  echo "cmdline: $(cat /proc/cmdline)"
+  echo "lockdown: $(cat /sys/kernel/security/lockdown 2>/dev/null)"
+  echo "sig_enforce: $(cat /sys/module/module/parameters/sig_enforce 2>/dev/null)"
+  # Last byte of the SecureBoot EFI variable: 1 = enabled.
+  echo "secureboot: $(od -An -t u1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}')"
+  echo "eld: $(systemctl is-active eld.service)"
+  echo "elctl-whoami:"; elctl whoami 2>&1
+  echo "install.json:"; cat /var/lib/el/image/install.json 2>&1
+  echo "harden-verify:"; el-harden-verify 2>&1
+  echo "failed-units:"; systemctl --failed --no-legend --plain 2>&1
+  echo "EL-CI-REPORT-END"
+} > "$out" 2>&1
+systemctl disable el-ci-report.service >/dev/null 2>&1
+systemctl poweroff

@@ -1,6 +1,6 @@
 # Distro comparison (substrate candidates)
 
-**Status:** research / decision input — **no base locked**  
+**Status:** decided 2026-10-30 — **Ubuntu 26.04 LTS** (see ARCHITECTURE.md §4). The comparison below is kept as the record.  
 **Owner:** cto-max-grok  
 **Date:** 2026-09-28  
 **Product context:** Enterprise Linux = frozen core + strong SSO + strong MDM *support* + curated apps + locked automatic updates + controlled first-party marketplace (concept) + AI research track. Ubuntu-as-substrate was the earlier working assumption; this document re-opens the plate.

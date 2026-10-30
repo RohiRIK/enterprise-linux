@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# el-build-uki - wrap the stock, Canonical-signed Ubuntu kernel and its
+# initrd into a Unified Kernel Image with our locked command line, and sign
+# it with our Secure Boot key (docs/KERNEL.md).
+#
+#   el-build-uki [--kernel-version VER] [--root DIR] [--output FILE]
+#                [--sb-key KEY --sb-cert CERT]
+#                [--pcr-key KEY --pcr-pub PEM] [--dry-run]
+#
+# Defaults come from /etc/el/uki.conf (EL_UKI_SB_KEY, EL_UKI_SB_CERT,
+# EL_UKI_PCR_KEY, EL_UKI_PCR_PUB, EL_UKI_OUTPUT_DIR). The command line is
+# /etc/kernel/cmdline. Without a Secure Boot key the UKI is built unsigned
+# and is only useful for tests: shim will not boot it.
+#
+# --pcr-key adds systemd's signed PCR 11 policy (.pcrsig), which is what
+# el-luks-enroll --tpm2-public-key binds to.
+set -euo pipefail
+
+root=""
+kver=""
+output=""
+dry_run=0
+conf=/etc/el/uki.conf
+
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  [ "${args[i]}" = --root ] && root="${args[i + 1]:-}"
+done
+root="${root%/}"
+# shellcheck disable=SC1090
+[ -r "$root$conf" ] && . "$root$conf"
+sb_key="${EL_UKI_SB_KEY:-}"
+sb_cert="${EL_UKI_SB_CERT:-}"
+pcr_key="${EL_UKI_PCR_KEY:-}"
+pcr_pub="${EL_UKI_PCR_PUB:-}"
+out_dir="${EL_UKI_OUTPUT_DIR:-/boot/efi/EFI/Linux}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) shift 2 ;;
+    --kernel-version) kver="${2:?}"; shift 2 ;;
+    --output) output="${2:?}"; shift 2 ;;
+    --sb-key) sb_key="${2:?}"; shift 2 ;;
+    --sb-cert) sb_cert="${2:?}"; shift 2 ;;
+    --pcr-key) pcr_key="${2:?}"; shift 2 ;;
+    --pcr-pub) pcr_pub="${2:?}"; shift 2 ;;
+    --dry-run) dry_run=1; shift ;;
+    -h|--help) usage 0 ;;
+    *) echo "el-build-uki: unknown argument: $1" >&2; usage 2 ;;
+  esac
+done
+
+die() { echo "el-build-uki: $*" >&2; exit 1; }
+
+if [ -z "$kver" ]; then
+  # Newest installed kernel.
+  kver="$(find "$root/boot" -maxdepth 1 -name 'vmlinuz-*' -printf '%f\n' 2>/dev/null \
+          | sed 's/^vmlinuz-//' | sort -V | tail -n1)"
+  [ -n "$kver" ] || die "no kernel found in $root/boot"
+fi
+
+linux="$root/boot/vmlinuz-$kver"
+initrd="$root/boot/initrd.img-$kver"
+cmdline="$root/etc/kernel/cmdline"
+[ -r "$linux" ] || die "missing $linux"
+[ -r "$initrd" ] || die "missing $initrd"
+[ -r "$cmdline" ] || die "missing $cmdline (written by the image build)"
+grep -qw 'lockdown=integrity\|lockdown=confidentiality' "$cmdline" \
+  || die "$cmdline must set lockdown= (docs/KERNEL.md)"
+grep -qw 'module.sig_enforce=1' "$cmdline" || die "$cmdline must set module.sig_enforce=1"
+
+if [ -n "$sb_key$sb_cert" ] && { [ -z "$sb_key" ] || [ -z "$sb_cert" ]; }; then
+  die "--sb-key and --sb-cert go together"
+fi
+if [ -n "$pcr_key$pcr_pub" ] && { [ -z "$pcr_key" ] || [ -z "$pcr_pub" ]; }; then
+  die "--pcr-key and --pcr-pub go together"
+fi
+
+[ -n "$output" ] || output="$root$out_dir/el-$kver.efi"
+
+cmd=(ukify build
+  "--linux=$linux" "--initrd=$initrd"
+  "--cmdline=@$cmdline" "--os-release=@$root/etc/os-release"
+  "--uname=$kver" "--output=$output.tmp")
+if [ -n "$sb_key" ]; then
+  cmd+=(--signtool=sbsign "--secureboot-private-key=$sb_key" "--secureboot-certificate=$sb_cert")
+fi
+if [ -n "$pcr_key" ]; then
+  cmd+=("--pcr-private-key=$pcr_key" "--pcr-public-key=$pcr_pub" --pcr-banks=sha256)
+fi
+
+if [ "$dry_run" = 1 ]; then
+  printf '%q ' "${cmd[@]}"; echo
+  exit 0
+fi
+
+command -v ukify >/dev/null || die "ukify not found (apt install systemd-ukify)"
+mkdir -p "$(dirname "$output")"
+"${cmd[@]}" >&2
+mv -f "$output.tmp" "$output"
+if [ -n "$sb_cert" ] && command -v sbverify >/dev/null; then
+  sbverify --cert "$sb_cert" "$output" >&2 || die "signature check failed on $output"
+fi
+[ -n "$sb_key" ] || echo "el-build-uki: warning: $output is unsigned; shim will refuse it" >&2
+echo "$output"

@@ -1,0 +1,57 @@
+# enterprise-linux autoinstall for the Ubuntu 26.04 LTS desktop ISO.
+# Rendered by image/build-iso.sh, which fills in the at-sign placeholders.
+# Reference: https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html
+autoinstall:
+  version: 1
+  # The installer asks for the first local account unless the build passes
+  # --test-identity (CI only). Day-to-day sign-in is meant to be the org IdP
+  # (docs/IDENTITY.md); this account is the local admin of record.
+  interactive-sections: [@INTERACTIVE@]
+  locale: en_US.UTF-8
+  keyboard:
+    layout: "us,il"
+    toggle: alt_shift_toggle
+  timezone: "@TIMEZONE@"
+  source:
+    id: ubuntu-desktop-minimal
+  # docs/KERNEL.md: stock signed kernel only, no DKMS / third-party drivers
+  # on the default image (unsigned modules would not load anyway).
+  kernel:
+    package: linux-generic
+  drivers:
+    install: false
+  codecs:
+    install: false
+  oem:
+    install: false
+  updates: security
+  # LUKS2 under LVM. The passphrase is a random install key generated per
+  # build; late-commands add the TPM2 slot. See image/README.md for when the
+  # install key slot is removed.
+  storage:
+    layout:
+      name: lvm
+      password: "@INSTALL_KEY@"
+  ssh:
+    install-server: false
+  packages:
+    # security/hardening/data/packages.tsv (debian family)
+    - auditd
+    - usbguard
+    - nftables
+    - apparmor
+    - apparmor-utils
+    - libpam-pwquality
+    # security/encryption + docs/KERNEL.md
+    - cryptsetup
+    - systemd-cryptsetup
+    - tpm2-tools
+    - systemd-ukify
+    - systemd-boot-efi
+    - sbsigntool
+    - python3
+    - python3-yaml          # scripts/apps/elapps
+@IDENTITY@
+  late-commands:
+    - bash /cdrom/el/image/late/el-install-target --target /target --media /cdrom/el --profile "@PROFILE@" --install-key-file /cdrom/el/install.key @LATE_ARGS@
+  shutdown: @SHUTDOWN@
