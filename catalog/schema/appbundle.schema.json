@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RohiRIK/enterprise-linux/catalog/schema/appbundle.schema.json",
+  "title": "AppBundle",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "enterprise-linux/v1"
+    },
+    "kind": {
+      "const": "AppBundle"
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "owner",
+        "description"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/slug"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]{4}\\.[0-9]{1,2}\\.[0-9]+$"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": [
+        "apps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "removable": {
+          "type": "boolean"
+        },
+        "includes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/slug"
+          },
+          "uniqueItems": true
+        },
+        "apps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/app"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*$"
+    },
+    "desktopFile": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "\\.desktop$"
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "native",
+              "flatpak",
+              "pwa",
+              "apt",
+              "dnf",
+              "zypper",
+              "default"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "\\.desktop$"
+          }
+        }
+      ]
+    },
+    "native": {
+      "type": "object",
+      "required": [
+        "packages"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "repo": {
+          "$ref": "#/$defs/slug"
+        }
+      }
+    },
+    "app": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "license",
+        "review",
+        "install"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/slug"
+        },
+        "name": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "review": {
+          "type": "object",
+          "required": [
+            "owner",
+            "date"
+          ],
+          "properties": {
+            "owner": {
+              "type": "string"
+            },
+            "date": {
+              "type": [
+                "string"
+              ],
+              "format": "date"
+            }
+          }
+        },
+        "risk": {
+          "type": "string"
+        },
+        "provides": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "desktopFile": {
+          "$ref": "#/$defs/desktopFile"
+        },
+        "defaultFor": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "mime",
+              "desktopFile"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "mime": {
+                "type": "string"
+              },
+              "desktopFile": {
+                "$ref": "#/$defs/desktopFile"
+              }
+            }
+          }
+        },
+        "install": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "apt": {
+              "$ref": "#/$defs/native"
+            },
+            "dnf": {
+              "$ref": "#/$defs/native"
+            },
+            "zypper": {
+              "$ref": "#/$defs/native"
+            },
+            "flatpak": {
+              "type": "object",
+              "required": [
+                "ref"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "ref": {
+                  "type": "string"
+                },
+                "remote": {
+                  "type": "string"
+                }
+              }
+            },
+            "pwa": {
+              "type": "object",
+              "required": [
+                "url",
+                "browser"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://"
+                },
+                "browser": {
+                  "$ref": "#/$defs/slug"
+                }
+              }
+            }
+          }
+        },
+        "policies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "file",
+              "dest"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "dest": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  {
+                    "type": "object",
+                    "minProperties": 1,
+                    "propertyNames": {
+                      "enum": [
+                        "apt",
+                        "dnf",
+                        "zypper",
+                        "default"
+                      ]
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "pattern": "^/"
+                    }
+                  }
+                ]
+              },
+              "appliesTo": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "native",
+                    "flatpak",
+                    "pwa"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

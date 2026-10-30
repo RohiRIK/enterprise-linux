@@ -1,0 +1,44 @@
+# Security tools for SOC / IT staff. Offered only to a restricted group by MDM policy.
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: security-tools
+  version: 2026.10.0
+  owner: security
+  description: Network analysis and password vault tools for SOC and IT (restricted group).
+spec:
+  removable: true
+  includes: [core]
+  apps:
+    - id: wireshark
+      name: Wireshark
+      category: security
+      license: GPL-2.0-or-later
+      review: { owner: security, date: 2026-10-28 }
+      risk: Capturing needs membership in the wireshark group; grant through JIT admin only (docs/PERMISSIONS.md).
+      install:
+        apt:     { packages: [wireshark] }
+        dnf:     { packages: [wireshark] }
+        zypper:  { packages: [wireshark] }
+        flatpak: { ref: org.wireshark.Wireshark, remote: curated }
+    - id: nmap
+      name: Nmap
+      category: security
+      license: NPSL
+      review: { owner: security, date: 2026-10-28 }
+      risk: Network scanning may trip IDS; restricted group only.
+      install:
+        apt:    { packages: [nmap] }
+        dnf:    { packages: [nmap] }
+        zypper: { packages: [nmap] }
+    - id: keepassxc
+      name: KeePassXC
+      category: security
+      license: GPL-3.0-or-later
+      review: { owner: security, date: 2026-10-28 }
+      risk: Local vault file; back it up under the org's rules.
+      install:
+        apt:     { packages: [keepassxc] }
+        dnf:     { packages: [keepassxc] }
+        zypper:  { packages: [keepassxc] }
+        flatpak: { ref: org.keepassxc.KeePassXC, remote: curated }

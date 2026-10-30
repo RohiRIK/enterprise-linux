@@ -137,6 +137,7 @@ Policies are **declarative and idempotent**: applying the same document twice ch
 ## 5. Integration contracts
 
 ### MDM
+- The device-side MDM client is our own agent with per-MDM connectors: [AGENT.md](AGENT.md).
 - **Inventory** = `GET /v1/facts`. Stable keys, documented units, semantic versioning of the schema.
 - **Policy** = `PUT /v1/settings` with a full `DevicePolicy`. Response returns per-key result (`applied`, `unchanged`, `rejected: reason`).
 - **Compliance** = `GET /v1/facts/compliance`. Designed so an Intune *custom compliance script* is a three-line wrapper: call `elctl facts get compliance --json` and print it.
@@ -161,6 +162,7 @@ Policies are **declarative and idempotent**: applying the same document twice ch
 ## 6. Security of the API itself
 
 - **AuthN:** Unix peer credentials (UID, PID, SELinux/AppArmor label of the caller). No passwords or tokens on the local socket.
+- **Unprivileged read of compliance facts:** the `user` role may read the non-sensitive `compliance` subset, because MDM compliance scripts (e.g. Intune discovery scripts) run in the user's context. See [AGENT.md](AGENT.md) §3.
 - **AuthZ:** every method maps to a polkit action (`org.enterpriselinux.updates.install` …). Roles from [PERMISSIONS.md](PERMISSIONS.md) decide which actions each user/agent gets. MDM and EDR agents are registered **service principals** with their own scoped role.
 - **Audit:** all writes and all actions audited; reads of sensitive facts (recovery key metadata) audited too. Recovery keys themselves are **never** returned by the API — only escrowed.
 - **Rate limiting and confirmation** for destructive actions.

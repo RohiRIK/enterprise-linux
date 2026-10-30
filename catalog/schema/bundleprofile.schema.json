@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RohiRIK/enterprise-linux/catalog/schema/bundleprofile.schema.json",
+  "title": "BundleProfile",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "enterprise-linux/v1"
+    },
+    "kind": {
+      "const": "BundleProfile"
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": [
+        "bundles"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "prefer": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "native",
+              "flatpak",
+              "pwa"
+            ]
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "bundles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "defaults": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "settings": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z0-9_]+$"
+          },
+          "additionalProperties": {
+            "type": [
+              "string",
+              "array",
+              "boolean",
+              "number"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

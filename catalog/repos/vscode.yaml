@@ -1,0 +1,10 @@
+apiVersion: enterprise-linux/v1
+kind: VendorRepo
+metadata: { name: vscode, owner: it-platform }
+spec:
+  key:
+    url: https://packages.microsoft.com/keys/microsoft.asc
+    fingerprint: BC528686B50D79E339D3721CEB3E94ADBE1229CF
+  apt:    { uri: https://packages.microsoft.com/repos/code, suite: stable, components: [main], architectures: [amd64, arm64] }
+  dnf:    { baseurl: https://packages.microsoft.com/yumrepos/vscode }
+  zypper: { baseurl: https://packages.microsoft.com/yumrepos/vscode }

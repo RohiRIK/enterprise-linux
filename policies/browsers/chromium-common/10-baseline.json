@@ -1,0 +1,38 @@
+{
+  "SafeBrowsingProtectionLevel": 1,
+  "SafeBrowsingExtendedReportingEnabled": false,
+  "DownloadRestrictions": 1,
+  "PromptForDownloadLocation": true,
+  "HttpsOnlyMode": "force_balanced_enabled",
+
+  "PasswordManagerEnabled": false,
+  "ImportSavedPasswords": false,
+  "AutofillCreditCardEnabled": false,
+  "PaymentMethodQueryEnabled": false,
+
+  "SyncDisabled": true,
+  "BrowserGuestModeEnabled": false,
+  "BrowserAddPersonEnabled": false,
+
+  "MetricsReportingEnabled": false,
+  "UrlKeyedAnonymizedDataCollectionEnabled": false,
+  "SpellCheckServiceEnabled": false,
+  "UserFeedbackAllowed": false,
+
+  "DefaultBrowserSettingEnabled": false,
+  "BackgroundModeEnabled": false,
+
+  "DeveloperToolsAvailability": 0,
+  "ExtensionInstallBlocklist": ["*"],
+
+  "BuiltInDnsClientEnabled": false,
+  "DnsOverHttpsMode": "off",
+
+  "AuthServerAllowlist": "{{ auth_server_allowlist }}",
+
+  "HomepageLocation": "{{ homepage }}",
+  "HomepageIsNewTabPage": false,
+  "ShowHomeButton": true,
+  "RestoreOnStartup": 4,
+  "RestoreOnStartupURLs": ["{{ homepage }}"]
+}

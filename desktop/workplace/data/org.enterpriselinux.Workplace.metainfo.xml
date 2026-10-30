@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.enterpriselinux.Workplace</id>
+  <name>Workplace</name>
+  <summary>IT self-service for managed enterprise-linux devices</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      One place for everything IT: device status and compliance, approved apps,
+      updates and restarts, temporary access requests, USB devices, and help.
+      Skeleton: it talks to the device management service (eld), which is not built yet,
+      and shows labelled demo data until then.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.enterpriselinux.Workplace.desktop</launchable>
+  <url type="homepage">https://github.com/RohiRIK/enterprise-linux</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-29" type="development"/>
+  </releases>
+</component>

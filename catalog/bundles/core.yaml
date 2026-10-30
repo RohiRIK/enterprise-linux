@@ -1,0 +1,68 @@
+# Core: what every managed device needs to be managed and secure. Not removable.
+# eld/elctl and the identity module join this bundle once they are packaged
+# (see docs/CONTROL-API.md); they are not listed here because they do not exist yet.
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: core
+  version: 2026.10.0
+  owner: it-platform
+  description: Runtime pieces every managed device needs (app runtime, portals, printing, firewall, installer deps).
+spec:
+  removable: false
+  includes: []
+  apps:
+    - id: flatpak
+      name: Flatpak runtime
+      category: system
+      license: LGPL-2.1-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Needed for curated user apps. Remotes are restricted to the curated remote by policy.
+      install:
+        apt:    { packages: [flatpak, xdg-desktop-portal, xdg-desktop-portal-gtk] }
+        dnf:    { packages: [flatpak, xdg-desktop-portal, xdg-desktop-portal-gtk] }
+        zypper: { packages: [flatpak, xdg-desktop-portal, xdg-desktop-portal-gtk] }
+
+    - id: xdg-utils
+      name: Desktop integration utilities
+      category: system
+      license: MIT
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low. Used to open default apps (xdg-open) and read mimeapps.list.
+      install:
+        apt:    { packages: [xdg-utils, desktop-file-utils, shared-mime-info] }
+        dnf:    { packages: [xdg-utils, desktop-file-utils, shared-mime-info] }
+        zypper: { packages: [xdg-utils, desktop-file-utils, shared-mime-info] }
+
+    - id: printing
+      name: Printing (CUPS)
+      category: system
+      license: Apache-2.0
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Network printer discovery (cups-browsed) is a known attack surface; it is not installed here and is off by policy.
+      install:
+        apt:    { packages: [cups, cups-filters, printer-driver-all] }
+        dnf:    { packages: [cups, cups-filters] }
+        zypper: { packages: [cups, cups-filters] }
+
+    - id: firewalld
+      name: firewalld
+      category: security
+      license: GPL-2.0-or-later
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: One firewall on every family so policy is the same everywhere (instead of ufw on Ubuntu). See docs/HARDENING.md.
+      install:
+        apt:    { packages: [firewalld] }
+        dnf:    { packages: [firewalld] }
+        zypper: { packages: [firewalld] }
+
+    - id: elapps-runtime
+      name: App installer runtime (Python YAML)
+      category: system
+      license: MIT
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low. Needed by scripts/apps/elapps (Python 3.9+). openSUSE Leap 15's default python3 is 3.6, so Leap needs python311 / python311-PyYAML.  # verify per release
+      install:
+        apt:    { packages: [python3, python3-yaml, gnupg] }
+        dnf:    { packages: [python3, python3-pyyaml, gnupg2] }
+        zypper: { packages: [python3, python3-PyYAML, gpg2] }

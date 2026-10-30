@@ -1,0 +1,11 @@
+{
+  "BrowserSignin": 0,
+  "PromotionalTabsEnabled": false,
+  "BrowserLabsEnabled": false,
+  "ShoppingListEnabled": false,
+  "GenAiDefaultSettings": 2,
+  "PrivacySandboxPromptEnabled": false,
+  "PrivacySandboxAdTopicsEnabled": false,
+  "PrivacySandboxSiteEnabledAdsEnabled": false,
+  "PrivacySandboxAdMeasurementEnabled": false
+}

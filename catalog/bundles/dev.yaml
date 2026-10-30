@@ -1,0 +1,67 @@
+# Dev: engineering tools for the power-user role (docs/PERMISSIONS.md).
+# Language toolchains belong inside Distrobox/Toolbox containers, not on the host.
+apiVersion: enterprise-linux/v1
+kind: AppBundle
+metadata:
+  name: dev
+  version: 2026.10.0
+  owner: it-platform
+  description: Git, an editor, and rootless containers for developers (power-user role).
+spec:
+  removable: true
+  includes: [core]
+  apps:
+    - id: git
+      name: Git
+      category: dev
+      license: GPL-2.0-only
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Low.
+      install:
+        apt:    { packages: [git, git-lfs] }
+        dnf:    { packages: [git, git-lfs] }
+        zypper: { packages: [git, git-lfs] }
+
+    - id: vscode
+      name: Visual Studio Code
+      category: dev
+      license: proprietary
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Microsoft build with telemetry; marketplace extensions are an open supply-chain surface. Pin extensions by policy.
+      desktopFile: { native: code.desktop, flatpak: com.visualstudio.code.desktop }
+      install:
+        apt:     { packages: [code], repo: vscode }
+        dnf:     { packages: [code], repo: vscode }
+        zypper:  { packages: [code], repo: vscode }
+        flatpak: { ref: com.visualstudio.code, remote: curated }
+
+    - id: vscodium
+      name: VSCodium
+      category: dev
+      license: MIT
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Open-source build of VS Code without Microsoft telemetry; uses the Open VSX extension registry.
+      install:
+        flatpak: { ref: com.vscodium.codium, remote: curated }
+
+    - id: podman
+      name: Podman (rootless containers)
+      category: dev
+      license: Apache-2.0
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Rootless only; registries limited by /etc/containers/registries.conf policy.
+      install:
+        apt:    { packages: [podman, uidmap, slirp4netns] }
+        dnf:    { packages: [podman] }
+        zypper: { packages: [podman] }
+
+    - id: distrobox
+      name: Distrobox
+      category: dev
+      license: GPL-3.0-only
+      review: { owner: it-platform, date: 2026-10-28 }
+      risk: Containers share the user's home; packages install inside the container, never on the host.
+      install:
+        apt:    { packages: [distrobox] }
+        dnf:    { packages: [distrobox] }
+        zypper: { packages: [distrobox] }

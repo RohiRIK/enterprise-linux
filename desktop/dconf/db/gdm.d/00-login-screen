@@ -1,0 +1,9 @@
+# Tier: LOCKED (org). Login screen branding and behaviour.
+
+[org/gnome/login-screen]
+logo='/usr/share/enterprise-linux/branding/logo.svg'
+banner-message-enable=true
+banner-message-text='@LOGIN_BANNER@'
+# Org accounts sign in by name; no list of local users.
+disable-user-list=true
+disable-restart-buttons=false
