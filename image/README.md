@@ -2,7 +2,7 @@
 
 Builds the enterprise-linux installer from the **official Ubuntu 26.04 LTS desktop ISO**. We never rebuild Ubuntu: the ISO's boot records, shim, GRUB and kernel stay as Canonical signed them, and we add an autoinstall file plus our payload. No ISO blobs in git.
 
-> **Status:** first implementation, 2026-10-30. Checked in a container: the eld `.deb` builds, installs and runs; `el-install-target` runs against a real Ubuntu 26.04 root tree (debootstrap); `el-build-uki` builds and signs a UKI from the real 26.04 kernel; the ISO remaster runs against the real 26.04.1 ISO. **The full install has not run in a VM yet** (no KVM in the build container). That is what `dist/ci/image.yml` does. Not tested on real hardware.
+> **Status:** first implementation, 2026-10-30. Checked in a container: the eld `.deb` builds, installs and runs; `el-install-target` runs against a real Ubuntu 26.04 root tree (debootstrap); `el-build-uki` builds and signs a UKI from the real 26.04 kernel; the ISO remaster runs against the real 26.04.1 ISO, and the remastered ISO boots under UEFI Secure Boot (Microsoft keys) in QEMU into our GRUB entry and the 26.04.1 live session with the installer service started. **The full unattended install has not completed in a VM yet**: without KVM the emulated VM made no progress past the live session in 40 minutes, so whether the desktop installer picks up the autoinstall file is still unproven. That is what `dist/ci/image.yml` (with KVM) checks. Not tested on real hardware.
 
 ## Build
 

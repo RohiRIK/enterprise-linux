@@ -43,13 +43,13 @@ trap 'kill "$(cat "$work/swtpm.pid" 2>/dev/null)" 2>/dev/null || true' EXIT
 accel=tcg
 [ -w /dev/kvm ] && accel=kvm
 qemu_args=(-machine "q35,smm=on,accel=$accel" -cpu max -smp 4 -m 8192
-  -global driver=cfi.pflash01,property=secure,value=on
+  -global "driver=cfi.pflash01,property=secure,value=on"
   -drive "if=pflash,format=raw,unit=0,readonly=on,file=$ovmf_code"
   -drive "if=pflash,format=raw,unit=1,file=$work/vars.fd"
   -chardev "socket,id=chrtpm,path=$work/tpm.sock"
-  -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0
+  -tpmdev "emulator,id=tpm0,chardev=chrtpm" -device "tpm-tis,tpmdev=tpm0"
   -drive "file=$work/disk.qcow2,if=virtio,format=qcow2"
-  -netdev user,id=net0 -device virtio-net-pci,netdev=net0
+  -netdev "user,id=net0" -device "virtio-net-pci,netdev=net0"
   -vga virtio -display none -no-reboot)
 
 echo "vm-test: installing ($accel, up to $install_min min)"
