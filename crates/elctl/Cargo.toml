@@ -1,0 +1,12 @@
+[package]
+name = "elctl"
+description = "CLI for the enterprise-linux control API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eld-api = { path = "../eld-api" }
+serde_json.workspace = true

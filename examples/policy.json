@@ -1,0 +1,13 @@
+{
+  "apiVersion": "enterprise-linux/v1",
+  "kind": "DevicePolicy",
+  "metadata": { "name": "finance-laptops", "version": "2026.10.3" },
+  "spec": {
+    "updates": { "ring": "broad", "window": "Mon-Fri 12:00-13:00", "maxDeferralDays": 7 },
+    "encryption": { "required": true, "unlock": "tpm2+pin", "escrow": "mdm" },
+    "security": { "baseline": "cis-l1-workstation", "usb": { "storage": "block", "allow": ["vendor:046d"] } },
+    "apps": { "bundles": ["base", "office"], "allowSelfService": true },
+    "desktop": { "lock": ["wallpaper=false", "screensaver.timeout=true", "extensions=true"] },
+    "roles": { "local-admin": ["entra:group:IT-Linux-Admins"], "helpdesk": ["entra:group:Helpdesk"] }
+  }
+}

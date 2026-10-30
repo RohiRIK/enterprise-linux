@@ -1,0 +1,12 @@
+[package]
+name = "eld-api"
+description = "Wire types and Unix-socket client for the enterprise-linux control API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

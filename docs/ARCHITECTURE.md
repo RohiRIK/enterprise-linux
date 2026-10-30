@@ -57,7 +57,7 @@ Headline pillars (vision). MVP ships a subset — see §7. Nothing below claims 
 - **Not** AI-washing (“AI OS”) or bolting a chatbot onto the login screen and calling it differentiation.
 - **Not** promising FedRAMP / CIS **certification** on day 1 (baselines as checklists OK).
 - **Not** building a full MDM *vendor* that replaces Intune/Jamf — we **integrate / are ready for** org MDM, not rebrand as one on day 1.
-- **Linux-only:** no Windows-native clients, no live MDM/marketplace/AI claims, no Intune/Jamf badges, and no new dependencies.
+- **Linux-only:** no Windows-native clients, no live MDM/marketplace/AI claims, no Intune/Jamf badges, and code dependencies kept to a minimal reviewed set (today: serde, serde_json, libc).
 
 ---
 
@@ -131,7 +131,7 @@ The candidate set is documented in [`DISTRO-COMPARISON.md`](DISTRO-COMPARISON.md
 
 - One local daemon (`eld`, working name) + CLI (`elctl`) + D-Bus + REST over a Unix socket. The desktop GUI, MDM agents, EDR agents, and Ansible are all clients of the same API.
 - Resource model: **facts / settings / actions / events**; declarative, idempotent policy documents; every call authorized (polkit + roles) and audited.
-- Detail: [`CONTROL-API.md`](CONTROL-API.md).
+- Detail: [`CONTROL-API.md`](CONTROL-API.md). v0 prototype (Rust): [`ELD.md`](ELD.md).
 
 ### 5.9a Own management agent (design)
 
@@ -202,6 +202,11 @@ docs/AGENT.md                # own agent with multi-MDM connectors (Intune spike
 docs/PERMISSIONS.md          # roles, JIT elevation, polkit/sudo from directory
 docs/ENCRYPTION.md           # LUKS2 + TPM2, escrow, crypto profile
 docs/DESKTOP-UX.md           # daily GUI, tiered customization, IT app
+docs/ELD.md                  # eld/elctl v0 implementation notes
+Cargo.toml                   # Rust workspace
+crates/eld-api/ crates/eld/ crates/elctl/   # control API prototype
+dist/                        # systemd unit, example config
+examples/                    # example DevicePolicy
 image/
 scripts/
 catalog/                     # empty
@@ -226,7 +231,7 @@ No ISO blobs in git.
 10. **Image-based (bootc/ostree) or package-based** system? See [`HARDENING.md`](HARDENING.md) §4.
 11. **Desktop:** GNOME (recommended) or KDE Plasma?
 12. **Encryption unlock default:** TPM2 only, or TPM2 + PIN? Escrow target?
-13. **Control daemon language:** Rust or Go?
+13. ~~**Control daemon language:** Rust or Go?~~ **Rust** (2026-10-29); prototype in `crates/`, see [`ELD.md`](ELD.md).
 14. **Power-user role** in v1 (developers with containers), or user/helpdesk/admin only?
 
 ---
