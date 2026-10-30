@@ -1,0 +1,11 @@
+[Unit]
+Description=enterprise-linux: expire JIT elevation grants every minute
+
+[Timer]
+OnBootSec=30s
+OnCalendar=*-*-* *:*:00
+AccuracySec=5s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

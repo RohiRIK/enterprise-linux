@@ -1,0 +1,8 @@
+# File contexts for eld (see eld.te)
+/usr/libexec/eld                --      gen_context(system_u:object_r:eld_exec_t,s0)
+/usr/bin/elctl                  --      gen_context(system_u:object_r:bin_t,s0)
+/etc/el(/.*)?                           gen_context(system_u:object_r:eld_etc_t,s0)
+/var/lib/el(/.*)?                       gen_context(system_u:object_r:eld_var_lib_t,s0)
+/run/eld(/.*)?                          gen_context(system_u:object_r:eld_var_run_t,s0)
+/run/eld/api\.sock              -s      gen_context(system_u:object_r:eld_api_sock_t,s0)
+/usr/lib/systemd/system/eld\.service --  gen_context(system_u:object_r:eld_unit_file_t,s0)

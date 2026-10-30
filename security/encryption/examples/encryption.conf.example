@@ -1,0 +1,48 @@
+# /etc/el/encryption.conf - read by the el-* encryption tools.
+# Plain KEY=VALUE lines. The file is parsed, never sourced: no shell
+# expansion, only keys matching EL_[A-Z0-9_]+ are accepted, and values set
+# in the environment win. Keep it root:root 0600 (it names token files).
+
+# ---- unlock policy (el-luks-enroll, el-tpm-reseal) ----
+EL_UNLOCK_MODE=tpm2+pin              # tpm2 | tpm2+pin | tang | fido2 | passphrase
+EL_TPM2_PCRS=7                       # bound directly: Secure Boot state
+EL_TPM2_PUBLIC_KEY=/etc/systemd/tpm2-pcr-public-key.pem   # signed PCR 11 policy (UKI)
+#EL_TANG_URL=https://tang.corp.example
+#EL_TANG_THP=<thumbprint from `tang-show-keys`>
+EL_RESEAL_ALLOW_BRIDGE=0             # 1 = allow temporary bridge slots during firmware updates
+
+# ---- recovery key escrow (el-recovery-escrow) ----
+EL_ESCROW_BACKEND=vault              # file | vault | azure-keyvault | webhook
+EL_RECOVERY_MAX_AGE_DAYS=180         # rotate --if-needed also rotates keys older than this (0 = never)
+
+# file (labs/testing only: key stays on the device it protects)
+#EL_ESCROW_FILE_DIR=/var/lib/el/encryption/escrow-files
+
+# HashiCorp Vault KV v2
+EL_VAULT_ADDR=https://vault.corp.example:8200
+EL_VAULT_TOKEN_FILE=/run/el/vault-agent/token   # e.g. Vault Agent auto-auth sink
+EL_VAULT_KV_MOUNT=secret
+EL_VAULT_PATH_PREFIX=el/luks
+#EL_VAULT_NAMESPACE=it
+#EL_VAULT_CACERT=/etc/pki/el/vault-ca.pem
+
+# Azure Key Vault
+#EL_AZURE_KEYVAULT_NAME=corp-device-kv
+#EL_AZURE_USE_MANAGED_IDENTITY=1     # Azure VMs (IMDS)
+#EL_AZURE_TOKEN_FILE=/run/el/azure/token   # laptops: token written by a trusted agent
+#EL_AZURE_SECRET_PREFIX=luks-
+
+# Generic webhook (MDM / Control API)
+#EL_WEBHOOK_URL=https://mdm.corp.example/api/v1/escrow
+#EL_WEBHOOK_VERIFY_URL=https://mdm.corp.example/api/v1/escrow/{uuid}
+#EL_WEBHOOK_CLIENT_CERT=/etc/pki/el/device.crt   # mTLS with the enrollment certificate
+#EL_WEBHOOK_CLIENT_KEY=/etc/pki/el/device.key
+#EL_WEBHOOK_CACERT=/etc/pki/el/mdm-ca.pem
+#EL_WEBHOOK_TOKEN_FILE=/run/el/mdm/token
+
+# ---- remote wipe (el-crypto-erase) ----
+EL_ERASE_PUBKEY=/etc/el/keys/crypto-erase.pub.pem   # pinned MDM signing key (ship it in the image)
+
+# ---- misc ----
+#EL_HTTP_TIMEOUT=30
+#EL_ALLOW_INSECURE_HTTP=0            # never in production

@@ -2,4 +2,4 @@
 
 - `apps/elapps` — validate, plan, and apply curated app bundles (see [`catalog/README.md`](../catalog/README.md)).
 
-Harden / first-boot helpers are still placeholders.
+Security tooling (encryption, permissions, hardening) lives in [`../security/`](../security/README.md). First-boot helpers are still placeholders.

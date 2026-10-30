@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# escrow.d/azure-keyvault - Azure Key Vault secrets REST API (curl).
+#
+# Config:
+#   EL_AZURE_KEYVAULT_URL         https://<vault>.vault.azure.net   (or EL_AZURE_KEYVAULT_NAME)
+#   EL_AZURE_TOKEN_FILE           file holding a bearer token for https://vault.azure.net
+#   EL_AZURE_USE_MANAGED_IDENTITY 1 = fetch a token from the IMDS endpoint (Azure VMs)
+#   EL_AZURE_MI_CLIENT_ID         user-assigned managed identity client id (optional)
+#   EL_AZURE_IMDS_URL             default http://169.254.169.254/metadata/identity/oauth2/token
+#   EL_AZURE_SECRET_PREFIX        default "luks-"  -> secret name luks-<luks-uuid>
+# Laptops have no IMDS: use a token file written by an agent you trust
+# (e.g. an Azure Arc / MDM helper). The device identity needs only
+# "secrets/set" and "secrets/get" on the vault (Key Vault Secrets Officer
+# scoped as narrowly as possible).
+set -euo pipefail
+: "${EL_LIBDIR:?}"
+EL_PROG="escrow.d/azure-keyvault"
+# shellcheck source=../el-common.sh
+. "$EL_LIBDIR/el-common.sh"
+
+: "${EL_ESCROW_WORK:?}" "${EL_ESCROW_UUID:?}"
+W="$EL_ESCROW_WORK"
+VAULT="${EL_AZURE_KEYVAULT_URL:-}"
+if [ -z "$VAULT" ] && [ -n "${EL_AZURE_KEYVAULT_NAME:-}" ]; then
+    VAULT="https://${EL_AZURE_KEYVAULT_NAME}.vault.azure.net"
+fi
+[ -n "$VAULT" ] || el_die "EL_AZURE_KEYVAULT_URL or EL_AZURE_KEYVAULT_NAME required" 78
+NAME="${EL_AZURE_SECRET_PREFIX:-luks-}$EL_ESCROW_UUID"
+[[ "$NAME" =~ ^[0-9A-Za-z-]{1,127}$ ]] || el_die "invalid Key Vault secret name: $NAME" 78
+URL="${VAULT%/}/secrets/$NAME?api-version=7.4"
+trap 'el_shred "$W/az.hdr" "$W/az.body" "$W/az.resp" "$W/az.tok"' EXIT
+
+if [ -n "${EL_AZURE_TOKEN_FILE:-}" ]; then
+    el_make_header "$W/az.hdr" "Authorization" "$EL_AZURE_TOKEN_FILE" "Bearer "
+elif [ "${EL_AZURE_USE_MANAGED_IDENTITY:-0}" = 1 ]; then
+    imds="${EL_AZURE_IMDS_URL:-http://169.254.169.254/metadata/identity/oauth2/token}"
+    q="api-version=2018-02-01&resource=https%3A%2F%2Fvault.azure.net"
+    [ -n "${EL_AZURE_MI_CLIENT_ID:-}" ] && q="$q&client_id=$EL_AZURE_MI_CLIENT_ID"
+    # IMDS is link-local plain HTTP by design; it is the only http URL allowed here.
+    code="$(curl -sS --max-time 10 -H "Metadata: true" -o "$W/az.resp" -w '%{http_code}' "$imds?$q")" \
+        || el_die "managed identity token request failed" 75
+    el_http_ok "$code" || el_die "IMDS returned HTTP $code" 75
+    python3 - "$W/az.resp" "$W/az.tok" <<'PY' || el_die "no access_token in IMDS response" 75
+import json, os, sys
+tok = json.load(open(sys.argv[1])).get("access_token")
+if not tok:
+    sys.exit(1)
+fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+os.write(fd, tok.encode())
+os.close(fd)
+PY
+    el_make_header "$W/az.hdr" "Authorization" "$W/az.tok" "Bearer "
+else
+    el_die "set EL_AZURE_TOKEN_FILE or EL_AZURE_USE_MANAGED_IDENTITY=1" 78
+fi
+
+case "${1:-}" in
+    escrow)
+        : "${EL_ESCROW_KEY_FILE:?}"
+        rm -f "$W/az.body"
+        el_py escrow-body --format azure --key-file "$EL_ESCROW_KEY_FILE" --out "$W/az.body" \
+            --meta "luks_uuid=$EL_ESCROW_UUID" --meta "keyslot=${EL_ESCROW_KEYSLOT:-}" \
+            --meta "hostname=${EL_ESCROW_HOSTNAME:-}" --meta "machine_id=${EL_ESCROW_MACHINE_ID:-}" \
+            --meta "fingerprint_sha256=${EL_ESCROW_FINGERPRINT:-}"
+        code="$(el_curl "$W/az.resp" -H "@$W/az.hdr" -X PUT -H "Content-Type: application/json" \
+            --data-binary "@$W/az.body" "$URL")" || el_die "Key Vault request failed" 75
+        el_http_ok "$code" || el_die "Key Vault PUT returned HTTP $code" 75
+        id="$(el_py json-get "$W/az.resp" id 2>/dev/null)" || el_die "Key Vault response has no id" 75
+        code="$(el_curl "$W/az.resp" -H "@$W/az.hdr" "$URL")" || el_die "Key Vault read-back failed" 75
+        el_http_ok "$code" || el_die "Key Vault read-back returned HTTP $code" 75
+        el_py verify-field "$W/az.resp" value "$EL_ESCROW_FINGERPRINT" >/dev/null \
+            || el_die "Key Vault read-back fingerprint mismatch" 75
+        echo "azure-keyvault:$id" ;;
+    verify)
+        code="$(el_curl "$W/az.resp" -H "@$W/az.hdr" "$URL")" || exit 1
+        el_http_ok "$code" || exit 1
+        el_py verify-field "$W/az.resp" value "$EL_ESCROW_FINGERPRINT" >/dev/null ;;
+    *) echo "usage: azure-keyvault escrow|verify" >&2; exit 64 ;;
+esac

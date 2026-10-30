@@ -1,0 +1,14 @@
+#!/bin/bash
+# pam_exec hook: revoke a user's JIT grants when their session closes.
+# Install as /usr/libexec/el/el-jit-session-close and add to the session stack:
+#   session optional pam_exec.so quiet /usr/libexec/el/el-jit-session-close
+# "optional" + exit 0: a failure here must never block logout.
+# Caveat: pam_exec runs for every session close, so closing ANY session of the
+# user (e.g. one of several terminals) revokes their grants. See README.
+set -u
+[ "${PAM_TYPE:-}" = "close_session" ] || exit 0
+[ -n "${PAM_USER:-}" ] || exit 0
+# Fixed path on purpose: never take the binary from the (user-influenced) PAM environment.
+EL_JIT=/usr/bin/el-jit
+"$EL_JIT" expire --user "$PAM_USER" --logout >/dev/null 2>&1 || true
+exit 0

@@ -1,0 +1,836 @@
+#!/usr/bin/env python3
+"""el-harden-apply -- install the enterprise-linux hardening baseline.
+
+Implements layers 6-13 and 16 of docs/HARDENING.md on Debian/Ubuntu
+(AppArmor, nftables/ufw, apt) and RHEL-family (SELinux, firewalld, dnf,
+fapolicyd) systems. The baseline is a CIS/STIG-oriented implementation guide,
+NOT a certification claim, and has not been tested on real hardware yet.
+
+  el-harden-apply [--root DIR] [--dry-run] [--profile workstation|developer]
+                  [--skip LAYER[,LAYER]] [--usb-storage block|read-only|allow]
+                  [--allow-usb-id VID:PID] [--home-noexec auto|yes|no]
+                  [--firewall auto|nftables|firewalld|ufw] [--family debian|rhel]
+                  [--install-packages] [--json]
+
+--root other than "/" is an offline install into an image tree: files and
+managed edits are written, units are masked/preset with symlinks and a preset
+file, and nothing is executed against the running host.
+
+Exit codes: 0 ok, 1 an operation failed, 2 usage / unsupported system.
+"""
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+
+VERSION = "0.1.0"
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_SOURCE = os.path.normpath(os.path.join(HERE, ".."))
+
+# HARDENING.md §1 layer number -> short name used by --skip and files.tsv
+LAYERS = {
+    6: "mac",
+    7: "allowlist",
+    8: "device",
+    9: "network",
+    10: "kernel",
+    11: "sandbox",
+    12: "memsafe",
+    13: "audit",
+    16: "session",
+}
+LAYER_NAMES = set(LAYERS.values())
+MANIFEST_REL = "var/lib/el/hardening/applied.json"
+PRESET_REL = "etc/systemd/system-preset/40-el-hardening.preset"
+FSTAB_BEGIN = "# BEGIN el-hardening (managed by el-harden-apply; do not edit inside)"
+FSTAB_END = "# END el-hardening"
+
+
+# ----------------------------------------------------------------------------
+# helpers
+# ----------------------------------------------------------------------------
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+def parse_os_release(path):
+    data = {}
+    text = read_text(path)
+    if text is None:
+        return data
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        data[key.strip()] = val
+    return data
+
+
+def detect_family(osr):
+    ids = [osr.get("ID", "").lower()] + osr.get("ID_LIKE", "").lower().split()
+    if any(i in ("debian", "ubuntu") for i in ids):
+        return "debian"
+    if any(i in ("rhel", "fedora", "centos", "rocky", "almalinux") for i in ids):
+        return "rhel"
+    return "unknown"
+
+
+def supported_release(family, osr):
+    ver = osr.get("VERSION_ID", "")
+    if family == "debian" and osr.get("ID") == "ubuntu":
+        return ver in ("24.04", "26.04")
+    if family == "rhel":
+        return ver.split(".")[0] in ("9", "10")
+    return False
+
+
+def read_tsv(path):
+    rows = []
+    for line in (read_text(path) or "").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        rows.append(line.split("\t"))
+    return rows
+
+
+def when_matches(when, features):
+    if when == "any":
+        return True
+    return all(part in features for part in when.split("+"))
+
+
+# ----------------------------------------------------------------------------
+# applier
+# ----------------------------------------------------------------------------
+
+class Applier:
+    def __init__(self, args):
+        self.args = args
+        self.root = os.path.abspath(args.root)
+        self.live = self.root == "/"
+        self.dry = args.dry_run
+        self.source = os.path.abspath(args.source)
+        self.rootfs = os.path.join(self.source, "rootfs")
+        self.data = os.path.join(self.source, "data")
+        self.skip = set()
+        self.errors = 0
+        self.record = {
+            "schema": "el.hardening.applied/v1",
+            "tool_version": VERSION,
+            "files": [],
+            "edits": [],
+            "services": [],
+            "commands": [],
+            "pending": [],
+            "warnings": [],
+            "missing_packages": [],
+        }
+        self.prev = {}
+
+    # -- paths / logging -----------------------------------------------------
+
+    def rpath(self, rel):
+        return os.path.join(self.root, rel.lstrip("/"))
+
+    def log(self, msg):
+        print(("[dry-run] " if self.dry else "") + msg, file=sys.stderr)
+
+    def warn(self, msg):
+        self.record["warnings"].append(msg)
+        print("warning: " + msg, file=sys.stderr)
+
+    def pending(self, layer, msg):
+        self.record["pending"].append({"layer": layer, "item": msg})
+
+    def have(self, cmd):
+        return shutil.which(cmd) is not None
+
+    def run(self, layer, argv, check=False):
+        """Run a command against the live system (never in offline mode)."""
+        entry = {"layer": layer, "cmd": " ".join(argv)}
+        if not self.live:
+            entry["result"] = "deferred (offline root)"
+            self.record["commands"].append(entry)
+            return None
+        if self.dry:
+            entry["result"] = "dry-run"
+            self.record["commands"].append(entry)
+            self.log("would run: " + entry["cmd"])
+            return None
+        if not self.have(argv[0]):
+            entry["result"] = "skipped (not installed)"
+            self.record["commands"].append(entry)
+            return None
+        try:
+            proc = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  universal_newlines=True, timeout=300)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            entry["result"] = "error: %s" % exc
+            self.record["commands"].append(entry)
+            self.errors += 1
+            return None
+        entry["rc"] = proc.returncode
+        entry["result"] = "ok" if proc.returncode == 0 else "failed"
+        if proc.returncode != 0:
+            entry["stderr"] = proc.stderr.strip()[-500:]
+            if check:
+                self.errors += 1
+            self.warn("command failed (rc=%d): %s" % (proc.returncode, entry["cmd"]))
+        self.record["commands"].append(entry)
+        return proc
+
+    # -- file writing ------------------------------------------------------------
+
+    def _write(self, dest, data, mode):
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        tmp = dest + ".el-tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, dest)
+        if self.live and os.geteuid() == 0:
+            os.chown(dest, 0, 0)
+
+    def install_bytes(self, rel, data, mode, layer, generated=False):
+        dest = self.rpath(rel)
+        old = None
+        if os.path.isfile(dest):
+            with open(dest, "rb") as fh:
+                old = fh.read()
+        action = "unchanged"
+        if old != data:
+            action = "installed" if old is None else "updated"
+            ours = rel in self.prev_files
+            if not self.dry:
+                if old is not None and not ours and not os.path.exists(dest + ".el-orig"):
+                    shutil.copy2(dest, dest + ".el-orig")
+                self._write(dest, data, mode)
+            self.log("%s /%s" % (action, rel))
+        elif not self.dry and stat.S_IMODE(os.stat(dest).st_mode) != mode:
+            os.chmod(dest, mode)
+            action = "mode-fixed"
+        self.record["files"].append({
+            "path": "/" + rel, "layer": layer, "mode": "%04o" % mode,
+            "sha256": sha256_bytes(data), "action": action, "generated": generated,
+        })
+        return action != "unchanged"
+
+    def remove_file(self, rel, layer):
+        dest = self.rpath(rel)
+        if os.path.exists(dest):
+            if not self.dry:
+                os.remove(dest)
+            self.log("removed /%s" % rel)
+            self.record["files"].append({"path": "/" + rel, "layer": layer, "action": "removed"})
+
+    # -- managed edits -------------------------------------------------------------
+
+    def _edit(self, rel, layer, new_text, old_text, desc, mode=0o644):
+        changed = new_text != old_text
+        if changed and not self.dry:
+            dest = self.rpath(rel)
+            if old_text is not None and not os.path.exists(dest + ".el-orig"):
+                shutil.copy2(dest, dest + ".el-orig")
+            keep_mode = stat.S_IMODE(os.stat(dest).st_mode) if old_text is not None else mode
+            self._write(dest, new_text.encode("utf-8"), keep_mode)
+        if changed:
+            self.log("edited /%s (%s)" % (rel, desc))
+        self.record["edits"].append({"path": "/" + rel, "layer": layer, "change": desc,
+                                     "changed": changed})
+        return changed
+
+    def ensure_kv(self, rel, key, value, layer, sep="=", section=None, create=True,
+                  flag=False):
+        """Set KEY<sep>VALUE (or a bare flag) in a key/value or ini file,
+        preserving everything else. Commented-out defaults are left in place."""
+        old = read_text(self.rpath(rel))
+        if old is None and not create:
+            return False
+        lines = (old or "").splitlines()
+        want = key if flag else "%s%s%s" % (key, sep, value)
+        if sep.strip() == "":
+            pat = re.compile(r"^\s*%s(\s+|$)" % re.escape(key))
+        else:
+            pat = re.compile(r"^\s*%s\s*%s" % (re.escape(key), re.escape(sep.strip()))
+                             if not flag else r"^\s*%s\s*$" % re.escape(key))
+        cur_section = None
+        sec_start = None
+        sec_end = None
+        found = None
+        for i, line in enumerate(lines):
+            m = re.match(r"^\s*\[(.+)\]\s*$", line)
+            if m:
+                if cur_section == section and sec_start is not None and sec_end is None:
+                    sec_end = i
+                cur_section = m.group(1)
+                if cur_section == section:
+                    sec_start = i
+                continue
+            if cur_section == section and pat.match(line):
+                found = i
+        if section is not None and sec_start is not None and sec_end is None:
+            sec_end = len(lines)
+        if found is not None:
+            lines[found] = want
+        elif section is None:
+            lines.append(want)
+        elif sec_start is None:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines += ["[%s]" % section, want]
+        else:
+            insert = sec_end
+            while insert > sec_start + 1 and not lines[insert - 1].strip():
+                insert -= 1
+            lines.insert(insert, want)
+        new = "\n".join(lines) + "\n"
+        desc = "%s%s" % ("[%s] " % section if section else "", want)
+        return self._edit(rel, layer, new, old, desc)
+
+    def ensure_line(self, rel, line, layer, create_with=None):
+        old = read_text(self.rpath(rel))
+        if old is None:
+            new = "\n".join(create_with or [line]) + "\n"
+        elif line in [l.strip() for l in old.splitlines()]:
+            new = old
+        else:
+            new = old + ("" if old.endswith("\n") or not old else "\n") + line + "\n"
+        return self._edit(rel, layer, new, old, "line: %s" % line)
+
+    def ensure_block(self, rel, body_lines, layer):
+        old = read_text(self.rpath(rel))
+        text = old or ""
+        lines = text.splitlines()
+        out, inside = [], False
+        for l in lines:
+            if l.strip() == FSTAB_BEGIN:
+                inside = True
+                continue
+            if l.strip() == FSTAB_END:
+                inside = False
+                continue
+            if not inside:
+                out.append(l)
+        while out and not out[-1].strip():
+            out.pop()
+        if body_lines:
+            if out:
+                out.append("")
+            out += [FSTAB_BEGIN] + body_lines + [FSTAB_END]
+        new = "\n".join(out) + "\n" if out else ""
+        return self._edit(rel, layer, new, old, "managed block (%d lines)" % len(body_lines))
+
+    # -- services ----------------------------------------------------------------
+
+    def unit_exists(self, unit):
+        for d in ("etc/systemd/system", "usr/lib/systemd/system", "lib/systemd/system"):
+            p = self.rpath(os.path.join(d, unit))
+            if os.path.lexists(p) and os.path.realpath(p) != "/dev/null":
+                return True
+        return False
+
+    def service(self, unit, action, layer, reason):
+        entry = {"unit": unit, "action": action, "layer": layer, "reason": reason}
+        exists = self.unit_exists(unit)
+        if action in ("enable", "disable") and not exists and self.live:
+            entry["result"] = "absent"
+            self.record["services"].append(entry)
+            return
+        if self.live:
+            if action == "mask":
+                proc = self.run(layer, ["systemctl", "mask", "--now", unit])
+            elif action == "disable":
+                proc = self.run(layer, ["systemctl", "disable", "--now", unit])
+            else:
+                proc = self.run(layer, ["systemctl", "enable", "--now", unit])
+            entry["result"] = "dry-run" if self.dry else (
+                "ok" if proc is not None and proc.returncode == 0 else "failed")
+        else:
+            entry["result"] = self._offline_service(unit, action)
+        self.record["services"].append(entry)
+
+    def _offline_service(self, unit, action):
+        sysdir = self.rpath("etc/systemd/system")
+        link = os.path.join(sysdir, unit)
+        if action == "mask":
+            if os.path.islink(link) and os.readlink(link) == "/dev/null":
+                return "unchanged"
+            if not self.dry:
+                os.makedirs(sysdir, exist_ok=True)
+                if os.path.lexists(link):
+                    os.remove(link)
+                os.symlink("/dev/null", link)
+            self.log("masked %s (offline)" % unit)
+            return "masked"
+        if action == "disable":
+            removed = 0
+            if os.path.isdir(sysdir):
+                for d in os.listdir(sysdir):
+                    if d.endswith((".wants", ".requires")):
+                        p = os.path.join(sysdir, d, unit)
+                        if os.path.lexists(p):
+                            removed += 1
+                            if not self.dry:
+                                os.remove(p)
+            self.preset_lines.append("disable %s" % unit)
+            return "disabled (offline, %d links removed, preset)" % removed
+        self.preset_lines.append("enable %s" % unit)
+        return "preset enable (applied by systemctl preset on first boot)"
+
+    # -- layers --------------------------------------------------------------------
+
+    def install_layer_files(self, layer):
+        for row in self.file_rows:
+            rel, lay, when, mode = row[0], row[1], row[2], row[3]
+            if lay != layer or not when_matches(when, self.features):
+                continue
+            with open(os.path.join(self.rootfs, rel), "rb") as fh:
+                data = fh.read()
+            self.install_bytes(rel, data, int(mode, 8), layer)
+
+    def services_for(self, layer):
+        for row in self.service_rows:
+            unit, action, lay, when, profiles = row[0], row[1], row[2], row[3], row[4]
+            reason = row[5] if len(row) > 5 else ""
+            if lay != layer or not when_matches(when, self.features):
+                continue
+            if profiles not in ("all", self.args.profile):
+                continue
+            self.service(unit, action, layer, reason)
+
+    def check_packages(self):
+        for row in read_tsv(os.path.join(self.data, "packages.tsv")):
+            pkg, fam, layer, probe = row[:4]
+            if fam != self.family or layer in self.skip:
+                continue
+            if not os.path.exists(self.rpath(probe)):
+                self.record["missing_packages"].append({"package": pkg, "layer": layer})
+        missing = sorted({m["package"] for m in self.record["missing_packages"]})
+        if not missing:
+            return
+        pm = ["apt-get", "install", "-y"] if self.family == "debian" else ["dnf", "install", "-y"]
+        if self.args.install_packages and self.live:
+            self.run("packages", pm + missing, check=True)
+        else:
+            self.warn("missing packages (install with --install-packages or: %s): %s"
+                      % (" ".join(pm), " ".join(missing)))
+
+    def layer_kernel(self):
+        self.install_layer_files("kernel")
+        if self.live:
+            self.run("kernel", ["sysctl", "--system"])
+        self.pending("kernel", "module signature enforcement and lockdown come from the "
+                     "signed UKI / kernel cmdline (layer 1), verified by el-harden-verify")
+
+    def layer_audit(self):
+        self.install_layer_files("audit")
+        self.generate_setuid_rules()
+        self.services_for("audit")
+        if self.live:
+            self.run("audit", ["augenrules", "--load"])
+            self.run("audit", ["systemctl", "restart", "systemd-journald"])
+        fss = False
+        jdir = self.rpath("var/log/journal")
+        if os.path.isdir(jdir):
+            for d in os.listdir(jdir):
+                if os.path.exists(os.path.join(jdir, d, "fss")):
+                    fss = True
+        if not fss:
+            self.pending("audit", "journald Seal=yes needs `journalctl --setup-keys`; the "
+                         "verification key must be escrowed via the Control API first")
+        self.pending("audit", "SIEM forwarding target is policy (audit.forwarding); "
+                     "IMA measurement/appraisal not enabled yet")
+
+    def generate_setuid_rules(self):
+        """Audit rule per setuid/setgid binary found in the target tree."""
+        priv = read_text(os.path.join(self.rootfs, "etc/audit/rules.d/40-el-privilege.rules")) or ""
+        covered = set(re.findall(r"-F path=(\S+)", priv))
+        found = set()
+        for top in ("usr/bin", "usr/sbin", "usr/libexec", "usr/lib", "bin", "sbin"):
+            base = self.rpath(top)
+            if not os.path.isdir(base) or os.path.islink(base):
+                continue
+            for dirpath, dirnames, filenames in os.walk(base):
+                depth = dirpath[len(base):].count(os.sep)
+                if depth >= 3:
+                    dirnames[:] = []
+                for name in filenames:
+                    p = os.path.join(dirpath, name)
+                    try:
+                        st = os.lstat(p)
+                    except OSError:
+                        continue
+                    if stat.S_ISREG(st.st_mode) and st.st_mode & (stat.S_ISUID | stat.S_ISGID):
+                        found.add("/" + os.path.relpath(p, self.root))
+        lines = [
+            "## enterprise-linux audit baseline -- setuid/setgid executables (layer 13)",
+            "## GENERATED by el-harden-apply from a scan of the installed system;",
+            "## re-run apply after package changes. Binaries already covered by",
+            "## 40-el-privilege.rules are omitted.",
+            "## Ref: audit_rules_privileged_commands",
+        ]
+        for p in sorted(found - covered):
+            lines.append("-a always,exit -F path=%s -F perm=x -F auid>=1000 -F auid!=unset "
+                         "-k el_priv_setuid" % p)
+        self.install_bytes("etc/audit/rules.d/41-el-setuid.rules",
+                           ("\n".join(lines) + "\n").encode(), 0o640, "audit", generated=True)
+
+    def layer_mac(self):
+        self.install_layer_files("mac")
+        self.services_for("mac")
+        if self.mac == "apparmor":
+            if self.live:
+                self.run("mac", ["apparmor_parser", "-r", "-W",
+                                 "/etc/apparmor.d/usr.libexec.eld"])
+        else:
+            changed = self.ensure_kv("etc/selinux/config", "SELINUX", "enforcing", "mac")
+            self.ensure_kv("etc/selinux/config", "SELINUXTYPE", "targeted", "mac")
+            if self.live and self.have("getenforce") and not self.dry:
+                proc = self.run("mac", ["getenforce"])
+                mode = proc.stdout.strip() if proc is not None else ""
+                if mode == "Disabled":
+                    self.install_bytes(".autorelabel", b"", 0o644, "mac", generated=True)
+                    self.pending("mac", "SELinux was disabled: full relabel scheduled, reboot required")
+                elif mode == "Permissive":
+                    self.pending("mac", "SELinux permissive: enforcing after reboot "
+                                 "(not switched live to avoid breaking a running session)")
+            elif changed:
+                self.pending("mac", "SELinux enforcing takes effect on next boot")
+            self.pending("mac", "eld SELinux module: build with selinux/build.sh "
+                         "(needs selinux-policy-devel); confined-user mapping via "
+                         "bin/el-selinux-confined-users (org-specific groups)")
+
+    def layer_allowlist(self):
+        self.install_layer_files("allowlist")
+        if "fapolicyd" in self.features:
+            permissive = "1" if self.args.profile == "developer" else "0"
+            if not self.ensure_kv("etc/fapolicyd/fapolicyd.conf", "permissive", permissive,
+                                  "allowlist", sep=" = ", create=False) and \
+                    read_text(self.rpath("etc/fapolicyd/fapolicyd.conf")) is None:
+                self.pending("allowlist", "fapolicyd.conf missing (package not installed): "
+                             "set permissive = %s after installing fapolicyd" % permissive)
+            self.record["fapolicyd_permissive"] = permissive == "1"
+            self.services_for("allowlist")
+            if self.live:
+                self.run("allowlist", ["fagenrules", "--load"])
+        else:
+            self.pending("allowlist", "non-RHEL allowlisting = AppArmor + noexec mounts; "
+                         "IMA appraisal is planned, not enabled")
+        self.render_fstab()
+        if self.live:
+            self.run("allowlist", ["systemctl", "daemon-reload"])
+            self.pending("allowlist", "new mount options apply after reboot (or remount)")
+
+    def home_noexec(self):
+        v = self.args.home_noexec
+        if v == "auto":
+            return self.args.profile == "workstation"
+        return v == "yes"
+
+    def render_fstab(self):
+        rel = "etc/fstab"
+        text = read_text(self.rpath(rel)) or ""
+        existing = set()
+        inside = False
+        for line in text.splitlines():
+            s = line.strip()
+            if s == FSTAB_BEGIN:
+                inside = True
+                continue
+            if s == FSTAB_END:
+                inside = False
+                continue
+            if inside or not s or s.startswith("#"):
+                continue
+            parts = s.split()
+            if len(parts) >= 2:
+                existing.add(parts[1])
+        body = []
+        home = self.home_noexec()
+        for line in (read_text(os.path.join(self.data, "fstab.el-snippet")) or "").splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            if line.startswith("@HOME@"):
+                if not home:
+                    continue
+                line = line[len("@HOME@"):]
+            mnt = line.split()[1]
+            if mnt in existing:
+                self.warn("%s already has its own /etc/fstab entry; add nosuid,nodev,noexec "
+                          "to it by hand" % mnt)
+                continue
+            body.append(line)
+        self.record["home_noexec"] = home
+        self.ensure_block(rel, body, "allowlist")
+
+    def layer_device(self):
+        self.install_layer_files("device")
+        gen = [sys.executable, os.path.join(HERE, "el-usbguard-rules"),
+               "--root", self.root, "--storage", self.args.usb_storage]
+        for dev in self.args.allow_usb_id:
+            gen += ["--allow-id", dev]
+        if self.dry:
+            gen.append("--dry-run")
+        proc = subprocess.run(gen, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True)
+        if proc.returncode != 0:
+            self.errors += 1
+            self.warn("el-usbguard-rules failed: " + proc.stderr.strip())
+        else:
+            for f in json.loads(proc.stdout)["files"]:
+                f.update({"layer": "device", "generated": True})
+                self.record["files"].append(f)
+        self.record["usb_storage"] = self.args.usb_storage
+        # BlueZ: only bonded devices may use the HID profile (no drive-by keyboards)
+        self.ensure_kv("etc/bluetooth/input.conf", "ClassicBondedOnly", "true", "device",
+                       section="General", create=False)
+        self.services_for("device")
+        if self.live:
+            self.run("device", ["udevadm", "control", "--reload"])
+        self.pending("device", "Thunderbolt/USB4: firmware security level 'user' + bolt "
+                     "(no config shipped); Bluetooth class allowlist is policy-driven")
+
+    def layer_network(self):
+        self.install_layer_files("network")
+        if self.fw == "firewalld":
+            if read_text(self.rpath("etc/firewalld/firewalld.conf")) is None:
+                self.pending("network", "firewalld.conf missing: run firewall-cmd "
+                             "--set-default-zone=el-workstation after installing firewalld")
+            else:
+                self.ensure_kv("etc/firewalld/firewalld.conf", "DefaultZone", "el-workstation",
+                               "network")
+        elif self.fw == "ufw":
+            self.ensure_kv("etc/default/ufw", "DEFAULT_INPUT_POLICY", '"DROP"', "network",
+                           create=False)
+            self.ensure_kv("etc/default/ufw", "DEFAULT_FORWARD_POLICY", '"DROP"', "network",
+                           create=False)
+            self.ensure_kv("etc/ufw/ufw.conf", "ENABLED", "yes", "network", create=False)
+        self.services_for("network")
+        if self.live:
+            if self.fw == "firewalld":
+                self.run("network", ["firewall-cmd", "--reload"])
+            elif self.fw == "nftables":
+                self.run("network", ["nft", "-f", "/etc/nftables/el-baseline.nft"])
+            else:
+                self.run("network", ["ufw", "--force", "enable"])
+            self.run("network", ["systemctl", "try-reload-or-restart", "systemd-resolved"])
+            self.run("network", ["nmcli", "general", "reload", "conf"])
+        self.record["firewall"] = self.fw
+
+    def layer_sandbox(self):
+        self.install_layer_files("sandbox")
+        if self.live:
+            self.run("sandbox", ["systemctl", "daemon-reload"])
+        self.pending("sandbox", "Flatpak portal permissions and browser sandbox policy are "
+                     "rendered by the apps layer, not by this baseline")
+
+    def layer_memsafe(self):
+        # "Follow substrate" -- detect and report only.
+        sudo_rs = any(os.path.exists(self.rpath(p)) for p in
+                      ("usr/lib/cargo/bin/sudo", "usr/bin/sudo-rs"))
+        coreutils_rs = os.path.exists(self.rpath("usr/lib/cargo/bin/coreutils"))
+        self.record["memsafe"] = {"sudo_rs": sudo_rs, "rust_coreutils": coreutils_rs}
+        if not sudo_rs:
+            self.pending("memsafe", "sudo-rs not present; Ubuntu 26.04 ships it by default, "
+                         "24.04 has it in universe, RHEL does not ship it")
+
+    def layer_session(self):
+        # GNOME dconf keys (screen lock, greeter, media autorun) are owned by desktop/dconf;
+        # el-harden-verify checks that they are locked.
+        self.install_layer_files("session")
+        gdm_conf = "etc/gdm3/custom.conf" if self.family == "debian" else "etc/gdm/custom.conf"
+        # Only touch GDM config when GDM is installed (its directory exists)
+        gdm_present = os.path.isdir(self.rpath(os.path.dirname(gdm_conf)))
+        for key in ("AutomaticLoginEnable", "TimedLoginEnable"):
+            self.ensure_kv(gdm_conf, key, "false", "session", section="daemon",
+                           create=gdm_present)
+        self.ensure_kv(gdm_conf, "DisallowTCP", "true", "session", section="security",
+                       create=gdm_present)
+        self.ensure_kv(gdm_conf, "Enable", "false", "session", section="xdmcp",
+                       create=gdm_present)
+        for line in (read_text(os.path.join(self.data, "login.defs.el")) or "").splitlines():
+            parts = line.split()
+            if not parts or parts[0].startswith("#"):
+                continue
+            fam = parts[2] if len(parts) > 2 else "any"
+            if fam in ("any", self.family):
+                self.ensure_kv("etc/login.defs", parts[0], parts[1], "session", sep="\t")
+        for line in (read_text(os.path.join(self.data, "faillock.el")) or "").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                k, _, v = line.partition("=")
+                self.ensure_kv("etc/security/faillock.conf", k.strip(), v.strip(), "session",
+                               sep=" = ")
+            else:
+                self.ensure_kv("etc/security/faillock.conf", line, "", "session", flag=True)
+        if self.live and self.family == "rhel":
+            self.run("session", ["authselect", "enable-feature", "with-faillock"])
+        if self.family == "debian":
+            self.pending("session", "pam_faillock / pam_pwquality in the Ubuntu PAM stack "
+                         "belongs to the identity layer (pam-auth-update profile)")
+
+    # -- main ----------------------------------------------------------------------
+
+    def load_prev(self):
+        text = read_text(self.rpath(MANIFEST_REL))
+        if text:
+            try:
+                self.prev = json.loads(text)
+            except ValueError:
+                self.prev = {}
+        self.prev_files = {f["path"].lstrip("/") for f in self.prev.get("files", [])}
+
+    def resolve(self):
+        a = self.args
+        self.osr = parse_os_release(self.rpath("etc/os-release")) or \
+            parse_os_release(self.rpath("usr/lib/os-release"))
+        detected = detect_family(self.osr)
+        self.family = a.family or detected
+        if self.family == "unknown":
+            print("error: unsupported or unknown distribution (ID=%r); pass --family "
+                  "debian|rhel to override" % self.osr.get("ID"), file=sys.stderr)
+            return False
+        if not supported_release(self.family, self.osr):
+            self.warn("untested release %s %s (targets: Ubuntu 24.04/26.04, RHEL 9/10 family)"
+                      % (self.osr.get("ID"), self.osr.get("VERSION_ID")))
+        self.mac = "apparmor" if self.family == "debian" else "selinux"
+        fw = a.firewall
+        if fw == "auto":
+            fw = "nftables" if self.family == "debian" else "firewalld"
+        if fw == "ufw" and self.family != "debian":
+            print("error: --firewall ufw is only supported on the Debian family", file=sys.stderr)
+            return False
+        if fw == "nftables" and self.family == "rhel":
+            self.warn("nftables backend on RHEL: /etc/sysconfig/nftables.conf must include "
+                      "/etc/nftables/el-baseline.nft (not automated)")
+        self.fw = fw
+        self.features = {self.family, self.mac, fw}
+        if self.family == "rhel":
+            self.features.add("fapolicyd")
+        for item in a.skip:
+            for s in item.split(","):
+                s = s.strip()
+                if not s:
+                    continue
+                if s.isdigit() and int(s) in LAYERS:
+                    s = LAYERS[int(s)]
+                if s not in LAYER_NAMES:
+                    print("error: unknown layer %r for --skip (valid: %s or numbers %s)"
+                          % (s, ", ".join(sorted(LAYER_NAMES)),
+                             ", ".join(str(n) for n in sorted(LAYERS))), file=sys.stderr)
+                    return False
+                self.skip.add(s)
+        return True
+
+    def main(self):
+        if not self.resolve():
+            return 2
+        if self.live and not self.dry and os.geteuid() != 0:
+            print("error: applying to the live system needs root (or use --dry-run / --root)",
+                  file=sys.stderr)
+            return 2
+        self.file_rows = read_tsv(os.path.join(self.data, "files.tsv"))
+        self.service_rows = read_tsv(os.path.join(self.data, "services.tsv"))
+        self.preset_lines = []
+        self.load_prev()
+        self.log("family=%s mac=%s firewall=%s profile=%s root=%s skip=%s" % (
+            self.family, self.mac, self.fw, self.args.profile, self.root,
+            ",".join(sorted(self.skip)) or "-"))
+        self.check_packages()
+        order = [(10, self.layer_kernel), (13, self.layer_audit), (6, self.layer_mac),
+                 (7, self.layer_allowlist), (8, self.layer_device), (9, self.layer_network),
+                 (11, self.layer_sandbox), (12, self.layer_memsafe), (16, self.layer_session)]
+        applied = []
+        for num, fn in order:
+            name = LAYERS[num]
+            if name in self.skip:
+                self.log("skipping layer %d (%s)" % (num, name))
+                continue
+            fn()
+            applied.append(name)
+        if self.preset_lines or not self.live:
+            body = ["# enterprise-linux hardening presets (GENERATED by el-harden-apply).",
+                    "# Applied by `systemctl preset` / first boot of an image."]
+            body += sorted(set(self.preset_lines))
+            self.install_bytes(PRESET_REL, ("\n".join(body) + "\n").encode(), 0o644,
+                               "services", generated=True)
+        r = self.record
+        r.update({
+            "applied_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "root": self.root,
+            "mode": "live" if self.live else "offline",
+            "distro": {"id": self.osr.get("ID"), "version_id": self.osr.get("VERSION_ID"),
+                       "family": self.family},
+            "profile": self.args.profile,
+            "mac": self.mac,
+            "firewall": self.fw,
+            "layers_applied": applied,
+            "layers_skipped": sorted(self.skip),
+            "changed": any(f.get("action") not in ("unchanged", None) for f in r["files"])
+                       or any(e["changed"] for e in r["edits"]),
+            "disclaimer": "CIS/STIG-oriented implementation guide; not a certification claim; "
+                          "not hardware-tested",
+        })
+        if not self.dry:
+            dest = self.rpath(MANIFEST_REL)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            self._write(dest, (json.dumps(r, indent=2, sort_keys=True) + "\n").encode(), 0o640)
+        if self.args.json:
+            json.dump(r, sys.stdout, indent=2, sort_keys=True)
+            sys.stdout.write("\n")
+        else:
+            n_changed = sum(1 for f in r["files"] if f.get("action") not in ("unchanged",))
+            print("el-harden-apply: %s, %d file change(s), %d edit(s) changed, %d pending item(s)%s"
+                  % (self.family, n_changed, sum(1 for e in r["edits"] if e["changed"]),
+                     len(r["pending"]), " (dry run, nothing written)" if self.dry else ""))
+        return 1 if self.errors else 0
+
+
+def parse_args(argv):
+    ap = argparse.ArgumentParser(
+        prog="el-harden-apply",
+        description="Install the enterprise-linux hardening baseline (HARDENING.md layers "
+                    "6-13, 16). Implementation guide, not a certification claim.")
+    ap.add_argument("--root", default="/", help="target root (default /; other = offline image tree)")
+    ap.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    ap.add_argument("--profile", choices=("workstation", "developer"), default="workstation",
+                    help="developer = fapolicyd permissive (audit-only), no noexec /home")
+    ap.add_argument("--skip", action="append", default=[], metavar="LAYER",
+                    help="skip layer by name or number (repeatable, comma separated)")
+    ap.add_argument("--usb-storage", choices=("block", "read-only", "allow"), default="block")
+    ap.add_argument("--allow-usb-id", action="append", default=[], metavar="VID:PID")
+    ap.add_argument("--home-noexec", choices=("auto", "yes", "no"), default="auto",
+                    help="auto = yes for workstation, no for developer")
+    ap.add_argument("--firewall", choices=("auto", "nftables", "firewalld", "ufw"), default="auto")
+    ap.add_argument("--family", choices=("debian", "rhel"), help="override distro detection")
+    ap.add_argument("--install-packages", action="store_true",
+                    help="install missing packages with apt-get/dnf (live root only)")
+    ap.add_argument("--source", default=DEFAULT_SOURCE, help=argparse.SUPPRESS)
+    ap.add_argument("--json", action="store_true", help="print the manifest as JSON on stdout")
+    ap.add_argument("--version", action="version", version=VERSION)
+    return ap.parse_args(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(Applier(parse_args(sys.argv[1:])).main())

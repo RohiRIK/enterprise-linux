@@ -1,0 +1,6 @@
+# enterprise-linux -- extra AIDE paths (layer 13, Debian/Ubuntu aide.conf.d)
+# On RHEL (single /etc/aide.conf) add the same lines by hand for now; IMA
+# is the longer-term file-integrity direction (see README).
+/etc/el p+i+n+u+g+s+sha512
+/usr/libexec/eld p+i+n+u+g+s+sha512
+/etc/sudoers.d p+i+n+u+g+s+sha512

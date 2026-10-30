@@ -1,0 +1,14 @@
+#!/usr/bin/python3 -I
+"""el-breakglass: see security/permissions/README.md (design stage)."""
+import sys
+from pathlib import Path
+
+# Repo layout: <dir>/bin/el-breakglass + <dir>/lib/elperm. Installed: /usr/lib/el/permissions/lib.
+for cand in (Path(__file__).resolve().parent.parent / "lib", Path("/usr/lib/el/permissions/lib")):
+    if (cand / "elperm" / "__init__.py").is_file():
+        sys.path.insert(0, str(cand))
+        break
+
+from elperm.cli import breakglass_main  # noqa: E402
+
+sys.exit(breakglass_main())

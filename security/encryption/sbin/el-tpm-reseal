@@ -1,0 +1,313 @@
+#!/usr/bin/env bash
+# el-tpm-reseal - keep TPM2 unlock working across firmware / boot-chain updates.
+#
+# Implements docs/ENCRYPTION.md §2 "Firmware updates". The update flow calls:
+#
+#   el-tpm-reseal pre-update  --kind KIND   # before installing the update
+#   (install update, reboot into the new boot chain)
+#   el-tpm-reseal post-update               # first boot after the update
+#                                           # (el-tpm-reseal-post.service)
+#
+# For each systemd-tpm2 keyslot it compares the PCRs bound *directly* with
+# the PCRs the update will change:
+#   * no overlap (e.g. a UKI update with PCR 7 + signed PCR 11 policy): the
+#     signed policy already covers it - nothing to do. This is the preferred
+#     design and the reason el-luks-enroll supports --tpm2-public-key.
+#   * overlap, strategy "predict": add an extra slot sealed to PCR values the
+#     update tool predicted (--predicted-pcrs 7:sha256=<hex>); post-update
+#     keeps it if it unlocks and wipes the old slot.
+#   * overlap, strategy "bridge" (opt-in, EL_RESEAL_ALLOW_BRIDGE=1): add a
+#     temporary slot without the affected PCRs (still bound to the signed
+#     policy if any). post-update re-seals to the new measured values and
+#     wipes the bridge. Comparable to "suspend protection for one reboot";
+#     weaker while it exists.
+#   * otherwise: exit 2 "recovery expected" so the update flow can decide
+#     (e.g. confirm the recovery key is escrowed, or postpone).
+#
+# PIN-protected slots cannot be re-sealed unattended (the PIN is needed);
+# they need --pin-file or the user.
+#
+# UNTESTED ON REAL HARDWARE. Exercised only with mocks.
+set -euo pipefail
+
+_self="$(readlink -f "$0")"
+if [ -z "${EL_LIBDIR:-}" ]; then
+    if [ -f "$(dirname "$_self")/../lib/el-common.sh" ]; then
+        EL_LIBDIR="$(cd "$(dirname "$_self")/../lib" && pwd)"
+    else
+        EL_LIBDIR=/usr/lib/el/encryption
+    fi
+fi
+# shellcheck source=../lib/el-common.sh
+. "$EL_LIBDIR/el-common.sh"
+
+usage() {
+    cat <<'EOF'
+Usage: el-tpm-reseal pre-update  --kind KIND [options]
+       el-tpm-reseal post-update [options]
+       el-tpm-reseal status      [--device DEV]
+
+KIND (which PCRs change):  uki|kernel -> 4,11   bootloader|shim -> 4,7
+                           firmware -> 0,1,2,3,7   dbx|secureboot -> 7
+                           custom -> --affected-pcrs LIST
+
+Options:
+  --device DEV               LUKS2 device (repeatable; default: all crypto_LUKS from lsblk)
+  --strategy S               auto | predict | bridge | none   (default auto)
+  --affected-pcrs LIST       override the PCRs the update changes, e.g. 4+7
+  --predicted-pcrs SPEC      future values, e.g. 7:sha256=<hex>[+4:sha256=<hex>]
+  --tpm2-public-key PEM      signed-policy key to keep on new slots (default $EL_TPM2_PUBLIC_KEY)
+  --pin-file FILE            PIN for re-sealing tpm2+pin slots
+  --unlock-key-file FILE     existing key used to add slots
+  --unlock-tpm2              unlock with the existing TPM2 slot (systemd >= 256)
+  --force                    post-update: re-seal to current PCRs even without pending state
+  --dry-run                  print every state-changing command instead of running it
+  --json
+Exit codes: 0 ok, 2 recovery prompt expected (no safe strategy), other = error.
+EOF
+}
+
+CMD="${1:-}"; [ -n "$CMD" ] || { usage >&2; exit 64; }; shift
+case "$CMD" in -h|--help) usage; exit 0 ;; pre-update|post-update|status) ;;
+    *) usage >&2; el_die "unknown command: $CMD" 64 ;; esac
+
+DEVICES=() KIND="" STRATEGY="auto" AFFECTED="" PREDICTED="" PUBKEY="" PIN_FILE=""
+UNLOCK_KEY_FILE="" UNLOCK_TPM2=0 FORCE=0 JSON=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --device) DEVICES+=("$2"); shift 2 ;;
+        --kind) KIND="$2"; shift 2 ;;
+        --strategy) STRATEGY="$2"; shift 2 ;;
+        --affected-pcrs) AFFECTED="$2"; shift 2 ;;
+        --predicted-pcrs) PREDICTED="$2"; shift 2 ;;
+        --tpm2-public-key) PUBKEY="$2"; shift 2 ;;
+        --pin-file) PIN_FILE="$2"; shift 2 ;;
+        --unlock-key-file) UNLOCK_KEY_FILE="$2"; shift 2 ;;
+        --unlock-tpm2) UNLOCK_TPM2=1; shift ;;
+        --force) FORCE=1; shift ;;
+        --dry-run) EL_DRY_RUN=1; shift ;;
+        --json) JSON=1; shift ;;
+        -q|--quiet) EL_QUIET=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; el_die "unknown argument: $1" 64 ;;
+    esac
+done
+
+el_load_config
+PUBKEY="${PUBKEY:-${EL_TPM2_PUBLIC_KEY:-}}"
+STATE="$EL_STATE_DIR/reseal.json"
+case "$STRATEGY" in auto|predict|bridge|none) ;; *) el_die "invalid --strategy" 64 ;; esac
+
+el_require_root
+el_require_cmd python3
+
+if [ "$CMD" = status ] && [ "${#DEVICES[@]}" -eq 0 ]; then
+    el_py kv-dump --file "$STATE"; exit 0
+fi
+
+el_require_cmd cryptsetup systemd-cryptenroll
+if [ "${#DEVICES[@]}" -eq 0 ]; then
+    el_require_cmd lsblk
+    mapfile -t DEVICES < <(el_discover_luks)
+    [ "${#DEVICES[@]}" -gt 0 ] || el_die "no LUKS devices found" 66
+fi
+SDV="$(el_systemd_version)"
+[ "$SDV" -ge 252 ] || el_die "systemd >= 252 required (found $SDV)" 69
+
+trap el_cleanup_secrets EXIT
+el_secret_dir
+WORK="$EL_SECRET_DIR"
+
+if [ "$CMD" = pre-update ]; then
+    if [ -z "$AFFECTED" ]; then
+        case "$KIND" in
+            uki|kernel) AFFECTED="4+11" ;;
+            bootloader|shim) AFFECTED="4+7" ;;
+            firmware) AFFECTED="0+1+2+3+7" ;;
+            dbx|secureboot) AFFECTED="7" ;;
+            "") el_die "--kind is required for pre-update" 64 ;;
+            *) el_die "unknown --kind $KIND (use --affected-pcrs)" 64 ;;
+        esac
+    fi
+    [[ "$AFFECTED" =~ ^[0-9]+([+,][0-9]+)*$ ]] || el_die "invalid --affected-pcrs" 64
+    AFFECTED="${AFFECTED//,/+}"
+fi
+if [ -n "$PREDICTED" ]; then
+    [[ "$PREDICTED" =~ ^[0-9]+:sha(1|256|384|512)=[0-9a-fA-F]+(\+[0-9]+:sha(1|256|384|512)=[0-9a-fA-F]+)*$ ]] \
+        || el_die "invalid --predicted-pcrs (want 7:sha256=<hex>[+...])" 64
+fi
+
+UNLOCK_ARGS=()
+if [ -n "$UNLOCK_KEY_FILE" ]; then
+    UNLOCK_ARGS+=("--unlock-key-file=$UNLOCK_KEY_FILE")
+elif [ "$UNLOCK_TPM2" = 1 ]; then
+    [ "$SDV" -ge 256 ] || el_die "--unlock-tpm2 needs systemd >= 256" 69
+    UNLOCK_ARGS+=("--unlock-tpm2-device=auto")
+fi
+
+# enroll_tpm2 DEV PCRSPEC SIGNED(0/1) PIN(true/false)
+enroll_tpm2() {
+    local dev="$1" spec="$2" signed="$3" pin="$4" args
+    args=("--tpm2-device=auto" "--tpm2-pcrs=$spec")
+    if [ "$signed" = 1 ]; then
+        [ -n "$PUBKEY" ] || el_die "slot uses a signed PCR policy; pass --tpm2-public-key (or set EL_TPM2_PUBLIC_KEY)" 78
+        args+=("--tpm2-public-key=$PUBKEY" "--tpm2-public-key-pcrs=${SIGNED_PCRS:-11}")
+    fi
+    if [ "$pin" = true ]; then
+        [ -n "$PIN_FILE" ] || el_die "slot is PIN protected; pass --pin-file" 64
+        args+=("--tpm2-with-pin=yes")
+        NEWPIN="$(<"$PIN_FILE")"; export NEWPIN
+    fi
+    el_run systemd-cryptenroll "${args[@]}" "${UNLOCK_ARGS[@]}" "$dev"
+    unset NEWPIN
+}
+
+new_slots_since() {   # before.json dev -> prints new slot ids
+    el_luks_dump "$2" "$WORK/after.json"
+    el_py list-diff "$(el_py luks-query "$1" keyslots | tr '\n' ' ')" \
+                    "$(el_py luks-query "$WORK/after.json" keyslots | tr '\n' ' ')"
+}
+
+RESULTS=()
+OVERALL=0
+
+for dev in "${DEVICES[@]}"; do
+    el_assert_luks2 "$dev"
+    uuid="$(el_luks_uuid "$dev")"
+    el_luks_dump "$dev" "$WORK/before.json"
+    mapfile -t TSLOTS < <(el_py luks-query "$WORK/before.json" "slots-by-method=tpm2,tpm2+pin")
+
+    case "$CMD" in
+    status)
+        RESULTS+=("$(el_py kv-get --file "$STATE" --key "$uuid" 2>/dev/null || echo "{\"device\":\"$dev\",\"pending\":false}")") ;;
+
+    pre-update)
+        if [ "${#TSLOTS[@]}" -eq 0 ]; then
+            el_log "$dev: no TPM2 slot, nothing to re-seal"
+            RESULTS+=("{\"device\":\"$dev\",\"action\":\"none\",\"reason\":\"no-tpm2-slot\"}")
+            continue
+        fi
+        for slot in "${TSLOTS[@]}"; do
+            pol="$(el_py luks-query "$WORK/before.json" "tpm2-slot-policy=$slot")"
+            read -r bound signed pin < <(python3 -c 'import json,sys;p=json.loads(sys.argv[1]);print("+".join(map(str,p["pcrs"])) or "-", "+".join(map(str,p["signed_pcrs"])) or "-", str(p["pin"]).lower())' "$pol")
+            [ "$bound" = - ] && bound=""
+            [ "$signed" = - ] && signed=""
+            SIGNED_PCRS="$signed"
+            overlap="$(comm -12 <(tr '+' '\n' <<<"$bound" | sed '/^$/d' | sort) <(tr '+' '\n' <<<"$AFFECTED" | sort) | sort -n | paste -sd+ -)"
+            if [ -z "$overlap" ]; then
+                el_log "$dev slot $slot: bound PCRs [${bound:-none}] not touched by this update (signed PCRs: ${signed:-none}); no action"
+                RESULTS+=("{\"device\":\"$dev\",\"slot\":$slot,\"action\":\"none\",\"reason\":\"not-affected\"}")
+                continue
+            fi
+            strat="$STRATEGY"
+            if [ "$strat" = auto ]; then
+                if [ -n "$PREDICTED" ]; then strat=predict
+                elif [ "${EL_RESEAL_ALLOW_BRIDGE:-0}" = 1 ]; then strat=bridge
+                else strat=none; fi
+            fi
+            sflag=0; [ -n "$signed" ] && sflag=1
+            case "$strat" in
+                predict)
+                    [ -n "$PREDICTED" ] || el_die "strategy predict needs --predicted-pcrs" 64
+                    spec="$(python3 - "$bound" "$PREDICTED" <<'PY'
+import sys
+bound = [p for p in sys.argv[1].split("+") if p]
+pred = dict(x.split(":", 1) for x in sys.argv[2].split("+"))
+print("+".join("%s:%s" % (p, pred[p]) if p in pred else p for p in bound))
+PY
+)"
+                    missing="$(comm -23 <(tr '+' '\n' <<<"$overlap" | sort) <(tr '+' '\n' <<<"$PREDICTED" | cut -d: -f1 | sort) | paste -sd+ -)"
+                    [ -z "$missing" ] || el_die "no predicted value for affected PCR(s) $missing" 64
+                    enroll_tpm2 "$dev" "$spec" "$sflag" "$pin" ;;
+                bridge)
+                    if [ "$sflag" = 0 ]; then
+                        el_warn "$dev slot $slot: bridge slot has NO boot-state binding until post-update (no signed policy)"
+                    fi
+                    rest="$(comm -23 <(tr '+' '\n' <<<"$bound" | sed '/^$/d' | sort) <(tr '+' '\n' <<<"$AFFECTED" | sort) | sort -n | paste -sd+ -)"
+                    enroll_tpm2 "$dev" "$rest" "$sflag" "$pin" ;;
+                none)
+                    el_warn "$dev slot $slot: PCR(s) $overlap will change and no safe strategy is enabled; expect a recovery-key prompt. Make sure the key is escrowed (el-recovery-escrow verify)."
+                    RESULTS+=("{\"device\":\"$dev\",\"slot\":$slot,\"action\":\"none\",\"reason\":\"recovery-expected\",\"affected\":\"$overlap\"}")
+                    OVERALL=2
+                    continue ;;
+            esac
+            new=""
+            if [ "$EL_DRY_RUN" = 0 ]; then
+                new="$(new_slots_since "$WORK/before.json" "$dev" | paste -sd' ' -)"
+                [ -n "$new" ] || el_die "no new slot appeared on $dev" 70
+                cp "$WORK/after.json" "$WORK/before.json"
+                el_py kv-set --file "$STATE" --key "$uuid" --value "$(python3 -c 'import json,sys;print(json.dumps({"device":sys.argv[1],"pending":True,"kind":sys.argv[2],"strategy":sys.argv[3],"old_slots":[int(sys.argv[4])],"new_slots":[int(x) for x in sys.argv[5].split()],"policy":{"pcrs":sys.argv[6],"signed_pcrs":sys.argv[7],"pin":sys.argv[8]=="true"}}))' "$dev" "${KIND:-custom}" "$strat" "$slot" "$new" "$bound" "$signed" "$pin")"
+                el_audit "pre-update re-seal ($strat) on LUKS $uuid: old slot $slot, new slot(s) $new"
+            else
+                printf '[dry-run] record pending re-seal for %s in %s\n' "$uuid" "$STATE" >&2
+            fi
+            RESULTS+=("{\"device\":\"$dev\",\"slot\":$slot,\"action\":\"$strat\",\"new_slots\":\"$new\"}")
+        done ;;
+
+    post-update)
+        pending="$(el_py kv-get --file "$STATE" --key "$uuid" --field pending 2>/dev/null || echo false)"
+        if [ "$pending" != true ] && [ "$FORCE" = 0 ]; then
+            el_log "$dev: no pending re-seal"
+            RESULTS+=("{\"device\":\"$dev\",\"action\":\"none\"}")
+            continue
+        fi
+        strat="$(el_py kv-get --file "$STATE" --key "$uuid" --field strategy 2>/dev/null || echo force)"
+        mapfile -t OLD < <(el_py kv-get --file "$STATE" --key "$uuid" --field old_slots 2>/dev/null || true)
+        mapfile -t NEW < <(el_py kv-get --file "$STATE" --key "$uuid" --field new_slots 2>/dev/null || true)
+        bound="$(el_py kv-get --file "$STATE" --key "$uuid" --field policy.pcrs 2>/dev/null || echo "${EL_TPM2_PCRS:-7}")"
+        signed="$(el_py kv-get --file "$STATE" --key "$uuid" --field policy.signed_pcrs 2>/dev/null || true)"
+        pin="$(el_py kv-get --file "$STATE" --key "$uuid" --field policy.pin 2>/dev/null || echo false)"
+        if [ "$strat" = force ] && [ "${#TSLOTS[@]}" -gt 0 ]; then
+            # No state: take the policy from the first existing TPM2 slot.
+            pol="$(el_py luks-query "$WORK/before.json" "tpm2-slot-policy=${TSLOTS[0]}")"
+            read -r bound signed pin < <(python3 -c 'import json,sys;p=json.loads(sys.argv[1]);print("+".join(map(str,p["pcrs"])) or "-", "+".join(map(str,p["signed_pcrs"])) or "-", str(p["pin"]).lower())' "$pol")
+            [ "$bound" = - ] && bound=""
+            [ "$signed" = - ] && signed=""
+            OLD=("${TSLOTS[@]}")
+        fi
+        SIGNED_PCRS="$signed"
+        sflag=0; [ -n "$signed" ] && sflag=1
+
+        if [ "$strat" = predict ] && [ "${#NEW[@]}" -gt 0 ] && [ "$EL_DRY_RUN" = 0 ]; then
+            tok="$(el_py luks-query "$WORK/before.json" "token-for-slot=${NEW[0]}" | head -n1)"
+            if [ "$pin" = false ] && [ -n "$tok" ] && \
+               cryptsetup open --test-passphrase --token-only --token-id "$tok" "$dev" >/dev/null 2>&1; then
+                el_log "$dev: predicted slot ${NEW[0]} unlocks; wiping old slot(s) ${OLD[*]}"
+                el_wipe_slots "$dev" "${OLD[@]}"
+                el_py kv-del --file "$STATE" --key "$uuid"
+                el_audit "post-update: predicted slot ${NEW[0]} confirmed on LUKS $uuid, old ${OLD[*]} wiped"
+                RESULTS+=("{\"device\":\"$dev\",\"action\":\"confirmed-prediction\",\"wiped\":\"${OLD[*]}\"}")
+                continue
+            fi
+            el_warn "$dev: predicted slot did not unlock; re-sealing to the current measurements"
+        fi
+
+        # Re-seal to the PCR values of the boot chain we are running now.
+        enroll_tpm2 "$dev" "$bound" "$sflag" "$pin"
+        if [ "$EL_DRY_RUN" = 1 ]; then
+            el_wipe_slots "$dev" "${OLD[@]}" "${NEW[@]}"
+            RESULTS+=("{\"device\":\"$dev\",\"action\":\"reseal\",\"dry_run\":true}")
+            continue
+        fi
+        fresh="$(new_slots_since "$WORK/before.json" "$dev" | head -n1)"
+        [ -n "$fresh" ] || el_die "no new slot appeared on $dev" 70
+        tok="$(el_py luks-query "$WORK/after.json" "token-for-slot=$fresh" | head -n1)"
+        if [ "$pin" = false ]; then
+            if ! cryptsetup open --test-passphrase --token-only --token-id "$tok" "$dev" >/dev/null 2>&1; then
+                el_wipe_slots "$dev" "$fresh"
+                el_die "$dev: re-sealed slot $fresh failed to unlock; previous slots kept" 70
+            fi
+        fi
+        wipe=()
+        for s in "${OLD[@]}" "${NEW[@]}"; do [ -n "$s" ] && [ "$s" != "$fresh" ] && wipe+=("$s"); done
+        [ "${#wipe[@]}" -eq 0 ] || el_wipe_slots "$dev" "${wipe[@]}"
+        el_py kv-del --file "$STATE" --key "$uuid"
+        el_audit "post-update: LUKS $uuid re-sealed to current PCRs in slot $fresh; wiped ${wipe[*]:-none}"
+        RESULTS+=("{\"device\":\"$dev\",\"action\":\"reseal\",\"slot\":$fresh,\"wiped\":\"${wipe[*]:-}\"}") ;;
+    esac
+done
+
+if [ "$JSON" = 1 ] || [ "$CMD" = status ]; then
+    printf '%s\n' "${RESULTS[@]}" | python3 -c 'import json,sys;print(json.dumps([json.loads(l) for l in sys.stdin if l.strip()],indent=2,sort_keys=True))'
+fi
+exit "$OVERALL"

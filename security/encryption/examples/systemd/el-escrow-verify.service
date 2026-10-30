@@ -1,0 +1,30 @@
+# Periodic escrow check: confirms the escrow record still matches the volume
+# and the backend, then rotates the recovery key if it was used, is too old,
+# or was never escrowed. Unattended rotation needs a way to unlock the volume:
+# --unlock-tpm2 (systemd >= 256, TPM-only slot) as below, or an unlock key file.
+[Unit]
+Description=Verify and rotate escrowed LUKS recovery keys
+Documentation=file:///usr/share/doc/enterprise-linux/encryption/README.md
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/el/encryption.conf
+
+[Service]
+Type=oneshot
+# "-": a failed verify is logged but must not block the rotation step.
+ExecStart=-/usr/sbin/el-recovery-escrow verify --quiet
+ExecStart=/usr/sbin/el-recovery-escrow rotate --if-needed --unlock-tpm2 --quiet
+# Hardening (the tool needs raw block device access and network for escrow).
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/el/encryption /run/el -/run/cryptsetup
+RuntimeDirectory=el
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0077

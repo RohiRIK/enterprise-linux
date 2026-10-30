@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enterprise-linux.example/schemas/role-policy/v1.json",
+  "title": "enterprise-linux RolePolicy v1 (design stage)",
+  "description": "Role -> directory group mapping, login allow/deny, sudo/polkit rendering, JIT, offline cache and break-glass settings. Mirrors docs/PERMISSIONS.md section 2. Validated by elperm.jsonschema_lite (a stdlib subset of JSON Schema 2020-12).",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+  "properties": {
+    "$comment": {"type": "string"},
+    "apiVersion": {"const": "enterprise-linux/v1"},
+    "kind": {"const": "RolePolicy"},
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+        "version": {"type": "string", "pattern": "^[A-Za-z0-9._+-]{1,64}$"},
+        "description": {"type": "string"}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": ["roles", "login", "breakGlass"],
+      "additionalProperties": false,
+      "properties": {
+        "sudo": {"$ref": "#/$defs/sudo"},
+        "groupNaming": {"$ref": "#/$defs/groupNaming"},
+        "roles": {
+          "type": "object",
+          "required": ["user"],
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[a-z][a-z0-9-]{0,31}$": {"$ref": "#/$defs/role"}
+          }
+        },
+        "login": {"$ref": "#/$defs/login"},
+        "offline": {"$ref": "#/$defs/offline"},
+        "jit": {"$ref": "#/$defs/jit"},
+        "sessionRecording": {"$ref": "#/$defs/sessionRecording"},
+        "breakGlass": {"$ref": "#/$defs/breakGlass"}
+      }
+    }
+  },
+  "$defs": {
+    "groupRef": {
+      "description": "Directory group reference: entra:group:<name or object id>, ad:group:<name>, local:group:<posix name>.",
+      "type": "string",
+      "pattern": "^(entra|ad|local):group:[^\\x00-\\x1f\",\\\\:]{1,256}$"
+    },
+    "groupRefList": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/groupRef"},
+      "uniqueItems": true
+    },
+    "userName": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,255}$"},
+    "duration": {"type": "string", "pattern": "^[0-9]+[smhd]$"},
+    "argv": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "polkitResult": {
+      "enum": ["yes", "no", "auth_self", "auth_self_keep", "auth_admin", "auth_admin_keep"]
+    },
+    "polkitEntry": {
+      "type": "object",
+      "required": ["action", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Exact polkit action id, or a prefix ending in '.*'.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*(\\.\\*)?$"
+        },
+        "result": {"$ref": "#/$defs/polkitResult"},
+        "units": {
+          "description": "For org.freedesktop.systemd1.manage-units: restrict to these units.",
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9@_.:-]+$"}
+        },
+        "verbs": {
+          "description": "For org.freedesktop.systemd1.manage-units: restrict to these verbs.",
+          "type": "array",
+          "items": {"enum": ["start", "stop", "restart", "reload", "reload-or-restart", "try-restart"]}
+        },
+        "comment": {"type": "string"}
+      }
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": {"type": "string"},
+        "enabled": {"type": "boolean", "default": true},
+        "elevated": {
+          "description": "Elevated roles are dropped when the offline cache expires. Defaults to true for every role except 'user'.",
+          "type": "boolean"
+        },
+        "priority": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "groups": {"$ref": "#/$defs/groupRefList"},
+        "sudo": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "commands": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string", "pattern": "^(ALL|/[^\\x00-\\x1f,:=\\\\#]+)$"}
+            },
+            "runas": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+(:[A-Za-z0-9_.-]+)?$"},
+            "nopasswd": {"type": "boolean", "default": false}
+          }
+        },
+        "polkit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "admin": {
+              "description": "Members are polkit admin identities (can answer auth_admin prompts).",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Result for every action not matched by an entry (null = fall through to lower roles).",
+              "anyOf": [{"$ref": "#/$defs/polkitResult"}, {"type": "null"}]
+            },
+            "actions": {"type": "array", "items": {"$ref": "#/$defs/polkitEntry"}}
+          }
+        }
+      }
+    },
+    "sudo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "implementation": {"enum": ["auto", "sudo", "sudo-rs"], "default": "auto"},
+        "securePath": {"type": "string", "pattern": "^/[A-Za-z0-9_/:.-]+$"},
+        "allowNopasswd": {
+          "description": "Must be true for any role to use nopasswd. Off by default (PERMISSIONS.md section 3).",
+          "type": "boolean",
+          "default": false
+        },
+        "logfile": {"type": "string", "pattern": "^/[A-Za-z0-9_/.-]+$"}
+      }
+    },
+    "groupNaming": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "entra": {"$ref": "#/$defs/namingRule"},
+            "ad": {"$ref": "#/$defs/namingRule"},
+            "local": {"$ref": "#/$defs/namingRule"}
+          }
+        },
+        "overrides": {
+          "description": "Explicit directory group -> POSIX group name; wins over templates.",
+          "type": "object",
+          "additionalProperties": {"type": "string", "pattern": "^[a-z_][a-z0-9_.@-]{0,255}$"}
+        }
+      }
+    },
+    "namingRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "template": {
+          "description": "Placeholders: {name} (verbatim), {slug} (lowercase, [a-z0-9_.-], runs of other chars -> '-').",
+          "type": "string",
+          "pattern": "\\{(name|slug)\\}"
+        },
+        "maxLength": {"type": "integer", "minimum": 8, "maximum": 256}
+      }
+    },
+    "login": {
+      "type": "object",
+      "required": ["allow"],
+      "additionalProperties": false,
+      "properties": {
+        "allow": {"$ref": "#/$defs/groupRefList"},
+        "deny": {"$ref": "#/$defs/groupRefList"},
+        "alwaysAllowLocal": {
+          "description": "Local accounts allowed on the console regardless of groups (break-glass is always added).",
+          "type": "array",
+          "items": {"$ref": "#/$defs/userName"}
+        }
+      }
+    },
+    "offline": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "graceDays": {"type": "integer", "minimum": 1, "maximum": 90, "default": 7},
+        "signing": {"enum": ["hmac-sha256", "ed25519"], "default": "hmac-sha256"}
+      }
+    },
+    "jit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean", "default": true},
+        "role": {"type": "string", "default": "local-admin"},
+        "maxDuration": {"$ref": "#/$defs/duration"},
+        "defaultDuration": {"$ref": "#/$defs/duration"},
+        "requireReason": {"type": "boolean", "default": true},
+        "revokeOnLogout": {"type": "boolean", "default": true},
+        "approver": {
+          "type": "object",
+          "required": ["mode"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": {"enum": ["auto", "helpdesk", "ticket"]},
+            "autoApproveGroups": {"$ref": "#/$defs/groupRefList"},
+            "approverRoles": {"type": "array", "items": {"type": "string"}},
+            "ticketPattern": {"type": "string"},
+            "ticketVerifyCommand": {"$ref": "#/$defs/argv"}
+          }
+        },
+        "commandAllowlist": {
+          "description": "fnmatch patterns a command-scoped request must match. The granted sudoers rule contains the exact command, never the pattern.",
+          "type": "array",
+          "items": {"type": "string", "pattern": "^/"}
+        }
+      }
+    },
+    "sessionRecording": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "iologDir": {"type": "string", "pattern": "^/[A-Za-z0-9_/.%{}-]+$"}
+      }
+    },
+    "breakGlass": {
+      "type": "object",
+      "required": ["account"],
+      "additionalProperties": false,
+      "properties": {
+        "account": {"type": "string", "pattern": "^[a-z_][a-z0-9_-]{0,31}$"},
+        "passwordLength": {"type": "integer", "minimum": 16, "maximum": 128, "default": 24},
+        "escrowCommand": {"$ref": "#/$defs/argv"},
+        "rotateAfterUseMinutes": {"type": "integer", "minimum": 5, "maximum": 10080, "default": 60},
+        "rotateEveryDays": {"type": "integer", "minimum": 1, "maximum": 365, "default": 30}
+      }
+    }
+  }
+}

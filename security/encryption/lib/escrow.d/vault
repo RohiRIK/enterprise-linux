@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# escrow.d/vault - HashiCorp Vault KV version 2 over its HTTP API (curl).
+#
+# Config (in /etc/el/encryption.conf or the environment):
+#   EL_VAULT_ADDR         https://vault.example.com:8200       (required)
+#   EL_VAULT_TOKEN_FILE   file with a token allowed to create/read the path (required)
+#                         e.g. written by Vault Agent auto-auth (cert / AppRole)
+#   EL_VAULT_KV_MOUNT     KV v2 mount (default: secret)
+#   EL_VAULT_PATH_PREFIX  (default: el/luks) -> <mount>/data/<prefix>/<machine-id>/<luks-uuid>
+#   EL_VAULT_NAMESPACE    Vault Enterprise namespace (optional)
+#   EL_VAULT_CACERT       CA bundle (optional)
+# A minimal policy for the device token only needs create+update+read on
+# <mount>/data/<prefix>/<machine-id>/*.
+set -euo pipefail
+: "${EL_LIBDIR:?}"
+EL_PROG="escrow.d/vault"
+# shellcheck source=../el-common.sh
+. "$EL_LIBDIR/el-common.sh"
+
+: "${EL_VAULT_ADDR:?EL_VAULT_ADDR not set}"
+: "${EL_VAULT_TOKEN_FILE:?EL_VAULT_TOKEN_FILE not set}"
+: "${EL_ESCROW_WORK:?}" "${EL_ESCROW_UUID:?}"
+MOUNT="${EL_VAULT_KV_MOUNT:-secret}"
+PREFIX="${EL_VAULT_PATH_PREFIX:-el/luks}"
+SPATH="$PREFIX/${EL_ESCROW_MACHINE_ID:-unknown}/$EL_ESCROW_UUID"
+URL="${EL_VAULT_ADDR%/}/v1/$MOUNT/data/$SPATH"
+
+W="$EL_ESCROW_WORK"
+el_make_header "$W/vault.hdr" "X-Vault-Token" "$EL_VAULT_TOKEN_FILE"
+args=(-H "@$W/vault.hdr")
+[ -n "${EL_VAULT_NAMESPACE:-}" ] && args+=(-H "X-Vault-Namespace: $EL_VAULT_NAMESPACE")
+[ -n "${EL_VAULT_CACERT:-}" ] && args+=(--cacert "$EL_VAULT_CACERT")
+trap 'el_shred "$W/vault.hdr" "$W/vault.body" "$W/vault.resp"' EXIT
+
+case "${1:-}" in
+    escrow)
+        : "${EL_ESCROW_KEY_FILE:?}"
+        rm -f "$W/vault.body"
+        el_py escrow-body --format vault --key-file "$EL_ESCROW_KEY_FILE" --out "$W/vault.body" \
+            --meta "luks_uuid=$EL_ESCROW_UUID" --meta "keyslot=${EL_ESCROW_KEYSLOT:-}" \
+            --meta "hostname=${EL_ESCROW_HOSTNAME:-}" --meta "machine_id=${EL_ESCROW_MACHINE_ID:-}" \
+            --meta "fingerprint_sha256=${EL_ESCROW_FINGERPRINT:-}"
+        code="$(el_curl "$W/vault.resp" "${args[@]}" -X POST -H "Content-Type: application/json" \
+            --data-binary "@$W/vault.body" "$URL")" || el_die "vault request failed" 75
+        el_http_ok "$code" || el_die "vault write returned HTTP $code" 75
+        ver="$(el_py json-get "$W/vault.resp" data.version 2>/dev/null || echo "?")"
+        # Read back and compare fingerprints before reporting success.
+        code="$(el_curl "$W/vault.resp" "${args[@]}" "$URL")" || el_die "vault read-back failed" 75
+        el_http_ok "$code" || el_die "vault read-back returned HTTP $code" 75
+        el_py verify-field "$W/vault.resp" data.data.recovery_key "$EL_ESCROW_FINGERPRINT" >/dev/null \
+            || el_die "vault read-back fingerprint mismatch" 75
+        echo "vault:$MOUNT/$SPATH#v$ver" ;;
+    verify)
+        code="$(el_curl "$W/vault.resp" "${args[@]}" "$URL")" || exit 1
+        el_http_ok "$code" || exit 1
+        el_py verify-field "$W/vault.resp" data.data.recovery_key "$EL_ESCROW_FINGERPRINT" >/dev/null ;;
+    *) echo "usage: vault escrow|verify" >&2; exit 64 ;;
+esac

@@ -62,6 +62,10 @@ Stock distributions are a blank canvas — weak enroll, weak policy, weak invent
 - [`docs/DESKTOP-UX.md`](docs/DESKTOP-UX.md) — daily GUI with tiered customization (design)
 - [`desktop/`](desktop/README.md) — first implementation: GNOME lockdown tiers, branding, default apps, Workplace IT app skeleton (not yet booted on an image)
 
+## Code
+
+- [`security/`](security/README.md) — first implementation of encryption (LUKS2 + TPM2 + escrow), permissions (roles, JIT admin, break-glass) and the hardening baseline. Container-tested only; not hardware-tested.
+
 ## License
 
 [MIT](LICENSE)

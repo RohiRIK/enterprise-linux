@@ -1,0 +1,13 @@
+[Unit]
+Description=enterprise-linux: rotate break-glass password when used or periodically due
+Documentation=file:///usr/share/doc/el/permissions/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/el-breakglass rotate --if-due
+# chpasswd writes /etc/shadow; the escrow hook usually needs the network (MDM agent).
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes

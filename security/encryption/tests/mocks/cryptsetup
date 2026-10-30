@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+import json, sys, _mocklib as m
+m.log_call("cryptsetup")
+args = [a for a in sys.argv[1:]]
+flags = [a for a in args if a.startswith("-")]
+pos = []
+skip = False
+for i, a in enumerate(args):
+    if skip:
+        skip = False
+        continue
+    if a in ("--type", "--token-id", "--key-file", "--json-file", "--key-slot"):
+        skip = True
+        continue
+    if a.startswith("-"):
+        continue
+    pos.append(a)
+
+def opt(name):
+    return args[args.index(name) + 1] if name in args else None
+
+if not pos:
+    print("cryptsetup 2.7.0 (mock)"); sys.exit(0)
+action = pos[0]
+if action == "token":
+    sub, dev = pos[1], pos[2]
+else:
+    dev = pos[1] if len(pos) > 1 else None
+try:
+    d = m.load_dev(dev)
+except Exception:
+    sys.stderr.write("Device %s does not exist or access denied.\n" % dev); sys.exit(4)
+mk = d["_mock"]
+if action == "isLuks":
+    if opt("--type") == "luks2" and mk["version"] != 2: sys.exit(1)
+    sys.exit(0)
+if action == "luksUUID":
+    print(mk["uuid"]); sys.exit(0)
+if action == "luksDump":
+    if mk["version"] != 2:
+        sys.stderr.write("Dump operation is not supported for this device type.\n"); sys.exit(1)
+    print(json.dumps(m.public(d))); sys.exit(0)
+if action == "open":
+    tid = opt("--token-id")
+    tok = d["tokens"].get(tid) if tid is not None else None
+    if "--test-passphrase" in args and tok and mk.get("tpm_ok", True):
+        sys.exit(0)
+    sys.stderr.write("No usable token is available.\n"); sys.exit(1)
+if action == "luksKillSlot":
+    m.remove_slots(d, [pos[2]]); m.save_dev(dev, d); sys.exit(0)
+if action in ("luksErase", "erase"):
+    d["keyslots"] = {}; d["tokens"] = {}; m.save_dev(dev, d); sys.exit(0)
+if action == "luksAddKey":
+    newkey = pos[2]
+    with open(newkey) as fh:
+        mk.setdefault("added_keys", []).append(len(fh.read()))
+    m.add_slot(d, kdf="argon2id"); m.save_dev(dev, d); sys.exit(0)
+if action == "token" and sub == "import":
+    with open(opt("--json-file")) as fh:
+        tok = json.load(fh)
+    d["tokens"][str(m.next_token(d))] = tok; m.save_dev(dev, d); sys.exit(0)
+sys.stderr.write("mock cryptsetup: unsupported %r\n" % args); sys.exit(2)

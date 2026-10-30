@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily LUKS recovery key escrow verification
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1d
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

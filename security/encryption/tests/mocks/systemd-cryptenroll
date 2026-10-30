@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+import os, secrets, sys, _mocklib as m
+m.log_call("systemd-cryptenroll")
+args = sys.argv[1:]
+if "--version" in args:
+    print("systemd %s (%s-mock)" % ((os.environ.get("MOCK_SYSTEMD_VERSION", "255"),) * 2)); sys.exit(0)
+opts = {}
+dev = None
+for a in args:
+    if a.startswith("--"):
+        k, _, v = a[2:].partition("=")
+        opts[k] = v
+    else:
+        dev = a
+if os.environ.get("MOCK_ENROLL_FAIL") == "1":
+    sys.stderr.write("Failed to enroll (mock).\n"); sys.exit(1)
+d = m.load_dev(dev)
+if "wipe-slot" in opts:
+    ids = []
+    for w in opts["wipe-slot"].split(","):
+        if w.isdigit():
+            ids.append(w)
+        else:
+            typ = {"tpm2": "systemd-tpm2", "fido2": "systemd-fido2", "recovery": "systemd-recovery"}.get(w, w)
+            for t in d["tokens"].values():
+                if t["type"] == typ:
+                    ids.extend(t["keyslots"])
+    m.remove_slots(d, ids)
+if "tpm2-device" in opts:
+    pin = opts.get("tpm2-with-pin") == "yes"
+    if pin and not os.environ.get("NEWPIN"):
+        sys.stderr.write("PIN required\n"); sys.exit(1)
+    pcrs = []
+    for p in (opts.get("tpm2-pcrs") or "").split("+"):
+        if p:
+            pcrs.append(int(p.split(":")[0]))
+    tok = {"type": "systemd-tpm2", "tpm2-blob": "AAAA", "tpm2-pcrs": pcrs,
+           "tpm2-pcr-bank": "sha256", "tpm2-pin": pin}
+    if "tpm2-public-key" in opts:
+        tok["tpm2_pubkey_pcrs"] = [int(x) for x in opts.get("tpm2-public-key-pcrs", "11").split("+") if x]
+        tok["tpm2_pubkey"] = "UFVCS0VZ"
+    if "tpm2-pcrs" in opts and ":" in opts["tpm2-pcrs"]:
+        tok["mock_predicted"] = opts["tpm2-pcrs"]
+    m.add_slot(d, token=tok)
+elif "fido2-device" in opts:
+    m.add_slot(d, token={"type": "systemd-fido2", "fido2-credential": "x"})
+elif "password" in opts:
+    if not os.environ.get("NEWPASSWORD"):
+        sys.stderr.write("no NEWPASSWORD\n"); sys.exit(1)
+    m.add_slot(d, kdf="argon2id")
+elif "recovery-key" in opts:
+    alpha = "cbdefghijklnrtuv"
+    key = "-".join("".join(secrets.choice(alpha) for _ in range(8)) for _ in range(8))
+    md = os.environ.get("MOCK_DIR")
+    if md:
+        with open(os.path.join(md, "last-recovery-key"), "w") as fh:
+            fh.write(key)
+    m.add_slot(d, token={"type": "systemd-recovery"})
+    sys.stderr.write("A secret recovery key has been generated for this volume:\n\n    \U0001F510 \x1b[1m")
+    sys.stdout.write(key)
+    sys.stderr.write("\x1b[0m")
+    sys.stdout.write("\n")
+    sys.stderr.write("\nPlease save this secret recovery key at a secure location.\n")
+    sys.stderr.write("█▀▄ QR " + key + " █▀▄\n")
+m.save_dev(dev, d)

@@ -1,0 +1,61 @@
+#!/usr/sbin/nft -f
+# enterprise-linux -- host firewall baseline, nftables backend (layer 9)
+# Used on the Debian/Ubuntu family (and on RHEL if --firewall nftables).
+# Default-deny inbound, allow outbound. No SSH, no listening services.
+# Not hardware-tested.
+#
+# Only our own table is (re)created; other tables (Docker, libvirt, podman)
+# are left alone. Note a packet must be accepted by EVERY base chain on a
+# hook, so this table's drop wins over an accept elsewhere.
+#
+# Idempotent reload: create-if-missing, delete, define.
+table inet el_filter
+delete table inet el_filter
+
+table inet el_filter {
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif "lo" accept
+        # Loopback addresses must only arrive on lo
+        iif != "lo" ip daddr 127.0.0.0/8 drop
+        iif != "lo" ip6 daddr ::1 drop
+
+        ct state invalid drop
+        ct state { established, related } accept
+
+        # ICMPv4 essentials (path MTU discovery, errors). Echo is dropped.
+        ip protocol icmp icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+
+        # ICMPv6 essentials (RFC 4890): errors + neighbour discovery.
+        # ND must have hop limit 255 (not routed from elsewhere).
+        meta l4proto ipv6-icmp icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem } accept
+        meta l4proto ipv6-icmp icmpv6 type { nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } ip6 hoplimit 255 accept
+        meta l4proto ipv6-icmp icmpv6 type { mld-listener-query, mld2-listener-report } ip6 saddr fe80::/10 accept
+
+        # DHCPv4 client: offers/acks may be broadcast and not match conntrack
+        udp sport 67 udp dport 68 accept
+        # DHCPv6 client
+        ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+
+        # mDNS is OFF by default (untrusted networks). Policy may enable it
+        # for a trusted network zone:
+        # ip daddr 224.0.0.251 udp dport 5353 accept
+        # ip6 daddr ff02::fb udp dport 5353 accept
+
+        # SSH: intentionally no rule (sshd is masked).
+
+        # Rate-limited log of what we drop, for the SIEM
+        limit rate 6/minute burst 10 packets log prefix "el-fw-drop: " level info
+    }
+
+    chain forward {
+        # Not a router. Trade-off: rootful Docker/libvirt bridged guests need
+        # forwarding; rootless Podman (pasta/slirp4netns) does not.
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}

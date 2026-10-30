@@ -1,0 +1,13 @@
+## enterprise-linux audit baseline -- finalize (layer 13)
+##
+## "-e 2" makes the rule set immutable until reboot (STIG/CIS L2 expectation).
+## It is OFF by default because:
+##   * policy updates from eld/MDM could no longer change audit rules live;
+##     every audit policy change would need a reboot;
+##   * EDR agents that manage their own audit rules (some use auditd) break.
+## Enable per policy once the update/reboot flow is in place.
+#-e 2
+
+## Make loginuid immutable once set. Off by default: breaks some container
+## runtimes that need to set loginuid for their payloads.
+#--loginuid-immutable

@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Fake curl: understands the subset of options the escrow backends use."""
+import hashlib, json, os, sys, _mocklib as m
+m.log_call("curl")
+a = sys.argv[1:]
+out = wfmt = method = data = url = None
+headers = []
+i = 0
+while i < len(a):
+    x = a[i]
+    if x in ("-o", "-w", "-X", "--data-binary", "-H", "--cacert", "--cert", "--key", "--proto",
+             "--max-time", "--retry"):
+        v = a[i + 1]; i += 2
+        if x == "-o": out = v
+        elif x == "-w": wfmt = v
+        elif x == "-X": method = v
+        elif x == "--data-binary": data = v
+        elif x == "-H": headers.append(v)
+        continue
+    if not x.startswith("-"):
+        url = x
+    i += 1
+hdr_text = ""
+for h in headers:
+    if h.startswith("@"):
+        with open(h[1:]) as fh:
+            hdr_text += fh.read()
+    else:
+        hdr_text += h + "\n"
+body = None
+if data and data.startswith("@"):
+    with open(data[1:]) as fh:
+        body = json.load(fh)
+md = os.environ["MOCK_DIR"]
+store_p = os.path.join(md, "curl-store.json")
+store = json.load(open(store_p)) if os.path.exists(store_p) else {}
+base = url.split("?")[0]
+code, resp = 200, {}
+expected_token = os.environ.get("MOCK_EXPECT_TOKEN")
+if os.environ.get("MOCK_CURL_FAIL") == "1":
+    code, resp = 500, {"errors": ["mock failure"]}
+elif expected_token and "169.254.169.254" not in url and expected_token not in hdr_text:
+    code, resp = 403, {"errors": ["permission denied"]}
+elif "169.254.169.254" in url:
+    resp = {"access_token": os.environ.get("MOCK_EXPECT_TOKEN", "mi-token"), "token_type": "Bearer"}
+elif "/v1/" in url and "/data/" in url:
+    if method == "POST":
+        ver = store.get(base, {}).get("version", 0) + 1
+        store[base] = {"version": ver, "data": body["data"]}
+        resp = {"data": {"version": ver}}
+    elif base in store:
+        resp = {"data": {"data": store[base]["data"], "metadata": {"version": store[base]["version"]}}}
+    else:
+        code = 404
+elif ".vault.azure.net" in url:
+    if method == "PUT":
+        store[base] = body
+        resp = {"id": base + "/0123abcd", "attributes": {"enabled": True}}
+    elif base in store:
+        resp = {"id": base + "/0123abcd", "value": store[base]["value"]}
+    else:
+        code = 404
+else:  # generic webhook
+    if method == "POST":
+        fp = hashlib.sha256(body["recovery_key"].encode()).hexdigest()
+        if os.environ.get("MOCK_WEBHOOK_BAD_ACK") == "1":
+            fp = "0" * 64
+        store[body["metadata"]["luks_uuid"]] = fp
+        resp = {"fingerprint_sha256": fp, "reference": "mdm-escrow-42"}
+    else:
+        uuid = url.rstrip("/").split("/")[-1]
+        if uuid in store:
+            resp = {"fingerprint_sha256": store[uuid]}
+        else:
+            code = 404
+json.dump(store, open(store_p, "w"))
+if out:
+    with open(out, "w") as fh:
+        json.dump(resp, fh)
+if wfmt:
+    sys.stdout.write(wfmt.replace("%{http_code}", str(code)))

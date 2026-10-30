@@ -1,0 +1,373 @@
+#!/usr/bin/env bash
+# el-luks-enroll - enroll a hardware/network unlock method on a LUKS2 volume.
+#
+# Implements docs/ENCRYPTION.md §2 "Unlock": tpm2 | tpm2+pin | tang | fido2 |
+# passphrase. Primary backend: systemd-cryptenroll. Tang (NBDE) uses Clevis.
+#
+# Idempotent: if an equivalent slot already exists nothing changes. When the
+# policy changes, the new slot is enrolled and verified first; old slots of
+# the same kind are wiped only afterwards.
+#
+# UNTESTED ON REAL HARDWARE. Exercised only with mocks and loop devices.
+set -euo pipefail
+
+_self="$(readlink -f "$0")"
+if [ -z "${EL_LIBDIR:-}" ]; then
+    if [ -f "$(dirname "$_self")/../lib/el-common.sh" ]; then
+        EL_LIBDIR="$(cd "$(dirname "$_self")/../lib" && pwd)"
+    else
+        EL_LIBDIR=/usr/lib/el/encryption
+    fi
+fi
+# shellcheck source=../lib/el-common.sh
+. "$EL_LIBDIR/el-common.sh"
+
+usage() {
+    cat <<'EOF'
+Usage: el-luks-enroll --device DEV [options]
+
+Policy:
+  --mode MODE                tpm2 | tpm2+pin | tang | fido2 | passphrase
+                             (default: $EL_UNLOCK_MODE or tpm2)
+  --pcrs LIST                PCRs bound directly, '+'-separated (default: $EL_TPM2_PCRS or 7)
+  --tpm2-public-key PEM      also bind a signed PCR policy (UKI, PCR 11 by default)
+  --tpm2-public-key-pcrs L   PCRs covered by the signed policy (default 11)
+  --tpm2-signature JSON      signature file used to test the signed policy at enroll time
+  --pin-file FILE            TPM2 PIN for tpm2+pin (read from file, never argv)
+  --passphrase-file FILE     new passphrase for --mode passphrase
+  --tang-url URL             Tang server (mode tang)
+  --tang-thp THUMBPRINT      pinned Tang key thumbprint (recommended)
+  --tang-trust-first-use     accept the Tang advertisement without a thumbprint
+  --fido2-with-pin yes|no    require FIDO2 client PIN (default yes)
+  --fido2-with-up yes|no     require FIDO2 user presence (default yes)
+
+Unlocking the volume to add a slot (otherwise systemd prompts):
+  --unlock-key-file FILE     existing passphrase/key file
+  --unlock-tpm2              use an existing TPM2 slot (systemd >= 256)
+  --unlock-fido2             use an existing FIDO2 slot (systemd >= 253)
+
+Behaviour:
+  --force                    re-enroll even if an equivalent slot exists
+  --keep-old                 never wipe the previous slots of the same kind
+  --no-verify                skip the post-enroll unlock test (old slots are then kept)
+  --crypttab-name NAME       match the crypttab entry by name
+  --crypttab-add NAME        add a crypttab entry with this name if none matches
+  --no-crypttab              do not touch /etc/crypttab
+  --netdev                   add _netdev to the crypttab entry (non-root Tang volumes)
+  --regenerate-initrd        run dracut / update-initramfs afterwards
+  --dry-run                  print every state-changing command instead of running it
+  --json                     print resulting state as JSON on stdout
+  -q, --quiet
+  -h, --help
+EOF
+}
+
+DEVICE="" MODE="" PCRS="" PUBKEY="" PUBKEY_PCRS="" SIGNATURE="" PIN_FILE="" PASS_FILE=""
+TANG_URL="" TANG_THP="" TANG_TOFU=0 FIDO2_PIN=yes FIDO2_UP=yes
+UNLOCK_KEY_FILE="" UNLOCK_TPM2=0 UNLOCK_FIDO2=0
+FORCE=0 KEEP_OLD=0 NO_VERIFY=0 CT_NAME="" CT_ADD="" NO_CT=0 NETDEV=0 REGEN=0 JSON=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --device) DEVICE="$2"; shift 2 ;;
+        --mode) MODE="$2"; shift 2 ;;
+        --pcrs) PCRS="$2"; shift 2 ;;
+        --tpm2-public-key) PUBKEY="$2"; shift 2 ;;
+        --tpm2-public-key-pcrs) PUBKEY_PCRS="$2"; shift 2 ;;
+        --tpm2-signature) SIGNATURE="$2"; shift 2 ;;
+        --pin-file) PIN_FILE="$2"; shift 2 ;;
+        --passphrase-file) PASS_FILE="$2"; shift 2 ;;
+        --tang-url) TANG_URL="$2"; shift 2 ;;
+        --tang-thp) TANG_THP="$2"; shift 2 ;;
+        --tang-trust-first-use) TANG_TOFU=1; shift ;;
+        --fido2-with-pin) FIDO2_PIN="$2"; shift 2 ;;
+        --fido2-with-up) FIDO2_UP="$2"; shift 2 ;;
+        --unlock-key-file) UNLOCK_KEY_FILE="$2"; shift 2 ;;
+        --unlock-tpm2) UNLOCK_TPM2=1; shift ;;
+        --unlock-fido2) UNLOCK_FIDO2=1; shift ;;
+        --force) FORCE=1; shift ;;
+        --keep-old) KEEP_OLD=1; shift ;;
+        --no-verify) NO_VERIFY=1; shift ;;
+        --crypttab-name) CT_NAME="$2"; shift 2 ;;
+        --crypttab-add) CT_ADD="$2"; shift 2 ;;
+        --no-crypttab) NO_CT=1; shift ;;
+        --netdev) NETDEV=1; shift ;;
+        --regenerate-initrd) REGEN=1; shift ;;
+        --dry-run) EL_DRY_RUN=1; shift ;;
+        --json) JSON=1; shift ;;
+        -q|--quiet) EL_QUIET=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; el_die "unknown argument: $1" 64 ;;
+    esac
+done
+
+el_load_config
+MODE="${MODE:-${EL_UNLOCK_MODE:-tpm2}}"
+PCRS="${PCRS:-${EL_TPM2_PCRS:-7}}"
+PUBKEY="${PUBKEY:-${EL_TPM2_PUBLIC_KEY:-}}"
+[ -n "$DEVICE" ] || { usage >&2; el_die "--device is required" 64; }
+case "$MODE" in tpm2|tpm2+pin|tang|fido2|passphrase) ;; *) el_die "invalid --mode: $MODE" 64 ;; esac
+[[ "$PCRS" =~ ^[0-9]+([+,][0-9]+)*$ ]] || el_die "invalid --pcrs: $PCRS" 64
+PCRS="${PCRS//,/+}"
+if [ -n "$PUBKEY" ]; then
+    PUBKEY_PCRS="${PUBKEY_PCRS:-11}"
+    [[ "$PUBKEY_PCRS" =~ ^[0-9]+([+,][0-9]+)*$ ]] || el_die "invalid --tpm2-public-key-pcrs" 64
+    PUBKEY_PCRS="${PUBKEY_PCRS//,/+}"
+    [ -r "$PUBKEY" ] || [ "$EL_DRY_RUN" = 1 ] || el_die "cannot read public key: $PUBKEY" 66
+fi
+
+el_require_root
+el_require_cmd cryptsetup python3
+case "$MODE" in
+    tang) el_require_cmd clevis ;;
+    *) el_require_cmd systemd-cryptenroll ;;
+esac
+
+SDV="$(el_systemd_version)"
+if [ "$MODE" != tang ] && [ "$SDV" -lt 252 ]; then
+    el_die "systemd-cryptenroll from systemd >= 252 required (found $SDV); on older systems use Clevis" 69
+fi
+if [ "$UNLOCK_TPM2" = 1 ] && [ "$SDV" -lt 256 ]; then
+    el_die "--unlock-tpm2 needs systemd >= 256 (found $SDV)" 69
+fi
+if [ "$UNLOCK_FIDO2" = 1 ] && [ "$SDV" -lt 253 ]; then
+    el_die "--unlock-fido2 needs systemd >= 253 (found $SDV)" 69
+fi
+
+trap el_cleanup_secrets EXIT
+el_secret_dir
+WORK="$EL_SECRET_DIR"
+
+el_assert_luks2 "$DEVICE"
+UUID="$(el_luks_uuid "$DEVICE")"
+el_luks_dump "$DEVICE" "$WORK/before.json"
+
+while IFS= read -r w; do
+    [ -n "$w" ] && el_warn "$w"
+done < <(el_py luks-query "$WORK/before.json" warnings)
+
+case "$MODE" in
+    tpm2|tpm2+pin) FAMILY="tpm2,tpm2+pin" ;;
+    fido2) FAMILY="fido2" ;;
+    tang) FAMILY="tang" ;;
+    passphrase) FAMILY="passphrase" ;;
+esac
+mapfile -t OLD_SLOTS < <(el_py luks-query "$WORK/before.json" "slots-by-method=$FAMILY")
+mapfile -t BEFORE_ALL < <(el_py luks-query "$WORK/before.json" keyslots)
+
+# ---- idempotency check ---------------------------------------------------
+already_enrolled() {
+    local s pol want_pcrs want_signed want_pin
+    case "$MODE" in
+        tpm2|tpm2+pin)
+            want_pcrs="$(printf '%s' "$PCRS" | tr '+' '\n' | sort -n | paste -sd, -)"
+            want_signed="$(printf '%s' "${PUBKEY_PCRS:-}" | tr '+' '\n' | sed '/^$/d' | sort -n | paste -sd, -)"
+            want_pin=false; [ "$MODE" = tpm2+pin ] && want_pin=true
+            for s in "${OLD_SLOTS[@]}"; do
+                pol="$(el_py luks-query "$WORK/before.json" "tpm2-slot-policy=$s")"
+                [ -n "$pol" ] || continue
+                if python3 - "$pol" "$want_pcrs" "$want_signed" "$want_pin" <<'PY'
+import json, sys
+p = json.loads(sys.argv[1])
+pcrs = [int(x) for x in sys.argv[2].split(",") if x]
+signed = [int(x) for x in sys.argv[3].split(",") if x]
+pin = sys.argv[4] == "true"
+sys.exit(0 if (p["pcrs"] == pcrs and p["signed_pcrs"] == signed and p["pin"] == pin) else 1)
+PY
+                then return 0; fi
+            done
+            return 1 ;;
+        fido2|tang)
+            [ "${#OLD_SLOTS[@]}" -gt 0 ] ;;
+        passphrase)
+            [ "${#OLD_SLOTS[@]}" -gt 0 ] && [ -z "$PASS_FILE" ] ;;
+    esac
+}
+
+SKIPPED=0
+NEW_SLOTS=()
+WIPED=()
+
+if [ "$FORCE" = 0 ] && already_enrolled; then
+    el_log "an equivalent $MODE slot already exists on $DEVICE; nothing to enroll (use --force to re-enroll)"
+    SKIPPED=1
+fi
+
+# ---- build unlock arguments ----------------------------------------------
+UNLOCK_ARGS=()
+CLEVIS_KEY_ARGS=()
+if [ -n "$UNLOCK_KEY_FILE" ]; then
+    [ -r "$UNLOCK_KEY_FILE" ] || el_die "cannot read --unlock-key-file" 66
+    UNLOCK_ARGS+=("--unlock-key-file=$UNLOCK_KEY_FILE")
+    CLEVIS_KEY_ARGS+=(-k "$UNLOCK_KEY_FILE")
+elif [ "$UNLOCK_TPM2" = 1 ]; then
+    UNLOCK_ARGS+=("--unlock-tpm2-device=auto")
+elif [ "$UNLOCK_FIDO2" = 1 ]; then
+    UNLOCK_ARGS+=("--unlock-fido2-device=auto")
+fi
+
+enroll() {
+    case "$MODE" in
+        tpm2|tpm2+pin)
+            local args=("--tpm2-device=auto" "--tpm2-pcrs=$PCRS")
+            if [ -n "$PUBKEY" ]; then
+                args+=("--tpm2-public-key=$PUBKEY" "--tpm2-public-key-pcrs=$PUBKEY_PCRS")
+                [ -n "$SIGNATURE" ] && args+=("--tpm2-signature=$SIGNATURE")
+            fi
+            if [ "$MODE" = tpm2+pin ]; then
+                args+=("--tpm2-with-pin=yes")
+                if [ -n "$PIN_FILE" ]; then
+                    [ -r "$PIN_FILE" ] || el_die "cannot read --pin-file" 66
+                    NEWPIN="$(<"$PIN_FILE")"; export NEWPIN
+                elif [ ! -t 0 ] && [ "$EL_DRY_RUN" = 0 ]; then
+                    el_die "tpm2+pin without a terminal needs --pin-file" 64
+                fi
+            fi
+            el_run systemd-cryptenroll "${args[@]}" "${UNLOCK_ARGS[@]}" "$DEVICE"
+            unset NEWPIN ;;
+        fido2)
+            el_run systemd-cryptenroll "--fido2-device=auto" \
+                "--fido2-with-client-pin=$FIDO2_PIN" "--fido2-with-user-presence=$FIDO2_UP" \
+                "${UNLOCK_ARGS[@]}" "$DEVICE" ;;
+        passphrase)
+            if [ -n "$PASS_FILE" ]; then
+                [ -r "$PASS_FILE" ] || el_die "cannot read --passphrase-file" 66
+                NEWPASSWORD="$(<"$PASS_FILE")"; export NEWPASSWORD
+            fi
+            el_run systemd-cryptenroll --password "${UNLOCK_ARGS[@]}" "$DEVICE"
+            unset NEWPASSWORD ;;
+        tang)
+            [ -n "$TANG_URL" ] || TANG_URL="${EL_TANG_URL:-}"
+            [ -n "$TANG_URL" ] || el_die "--tang-url is required for mode tang" 64
+            [ -n "$TANG_THP" ] || TANG_THP="${EL_TANG_THP:-}"
+            local cfg yes=()
+            if [ -n "$TANG_THP" ]; then
+                cfg="$(python3 -c 'import json,sys;print(json.dumps({"url":sys.argv[1],"thp":sys.argv[2]}))' "$TANG_URL" "$TANG_THP")"
+            else
+                [ "$TANG_TOFU" = 1 ] || el_die "pin the Tang key with --tang-thp (or accept TOFU with --tang-trust-first-use)" 64
+                cfg="$(python3 -c 'import json,sys;print(json.dumps({"url":sys.argv[1]}))' "$TANG_URL")"
+                yes=(-y)
+            fi
+            el_run clevis luks bind "${yes[@]}" -d "$DEVICE" "${CLEVIS_KEY_ARGS[@]}" tang "$cfg" ;;
+    esac
+}
+
+verify_slot() {
+    # Returns 0 when the slot was verified, 1 on failure, 2 when it cannot be
+    # verified non-interactively.
+    local slot="$1" tok
+    case "$MODE" in
+        tpm2|tpm2+pin|fido2)
+            tok="$(el_py luks-query "$WORK/after.json" "token-for-slot=$slot" | head -n1)"
+            [ -n "$tok" ] || return 1
+            if [ "$MODE" != tpm2 ] && [ ! -t 0 ]; then return 2; fi
+            cryptsetup open --test-passphrase --token-only --token-id "$tok" "$DEVICE" ;;
+        tang)
+            clevis luks pass -d "$DEVICE" -s "$slot" >/dev/null 2>&1 ;;
+        passphrase)
+            return 2 ;;
+    esac
+}
+
+if [ "$SKIPPED" = 0 ]; then
+    enroll
+    if [ "$EL_DRY_RUN" = 1 ]; then
+        el_log "dry-run: would verify the new slot, then wipe old $FAMILY slot(s): ${OLD_SLOTS[*]:-none}"
+        [ "$MODE" = passphrase ] || [ "$KEEP_OLD" = 1 ] || \
+            [ "${#OLD_SLOTS[@]}" -eq 0 ] || el_wipe_slots "$DEVICE" "${OLD_SLOTS[@]}"
+    else
+        el_luks_dump "$DEVICE" "$WORK/after.json"
+        mapfile -t AFTER_ALL < <(el_py luks-query "$WORK/after.json" keyslots)
+        mapfile -t NEW_SLOTS < <(el_py list-diff "${BEFORE_ALL[*]}" "${AFTER_ALL[*]}")
+        [ "${#NEW_SLOTS[@]}" -gt 0 ] || el_die "enrollment reported success but no new keyslot appeared" 70
+        el_log "enrolled $MODE in keyslot(s): ${NEW_SLOTS[*]}"
+        el_audit "enrolled $MODE on LUKS $UUID keyslot(s) ${NEW_SLOTS[*]}"
+
+        VERIFIED=1
+        if [ "$NO_VERIFY" = 1 ]; then
+            VERIFIED=0
+        else
+            for s in "${NEW_SLOTS[@]}"; do
+                rc=0; verify_slot "$s" || rc=$?
+                if [ "$rc" = 1 ]; then
+                    el_warn "new slot $s failed the unlock test; removing it and keeping the old slots"
+                    el_wipe_slots "$DEVICE" "${NEW_SLOTS[@]}"
+                    el_die "verification failed for $DEVICE slot $s" 70
+                elif [ "$rc" = 2 ]; then
+                    VERIFIED=0
+                    el_warn "slot $s cannot be tested non-interactively; keeping old slots"
+                fi
+            done
+        fi
+
+        if [ "$MODE" != passphrase ] && [ "$KEEP_OLD" = 0 ] && [ "${#OLD_SLOTS[@]}" -gt 0 ]; then
+            if [ "$VERIFIED" = 1 ]; then
+                el_wipe_slots "$DEVICE" "${OLD_SLOTS[@]}"
+                WIPED=("${OLD_SLOTS[@]}")
+                el_audit "wiped superseded $FAMILY keyslot(s) ${WIPED[*]} on LUKS $UUID"
+            else
+                el_warn "old slot(s) ${OLD_SLOTS[*]} kept; wipe them after testing: systemd-cryptenroll --wipe-slot=$(el_join , "${OLD_SLOTS[@]}") $DEVICE"
+            fi
+        fi
+    fi
+fi
+
+# ---- crypttab ---------------------------------------------------------------
+CT_JSON='null'
+if [ "$NO_CT" = 0 ]; then
+    ct_args=(--crypttab "$EL_CRYPTTAB" --uuid "$UUID" --device "$DEVICE" --mode "$MODE")
+    [ -n "$CT_NAME" ] && ct_args+=(--name "$CT_NAME")
+    [ -n "$CT_ADD" ] && ct_args+=(--add-name "$CT_ADD")
+    [ "$NETDEV" = 1 ] && ct_args+=(--netdev)
+    [ "$EL_DRY_RUN" = 1 ] && ct_args+=(--dry-run)
+    CT_JSON="$(el_py crypttab-update "${ct_args[@]}")"
+    matched="$(printf '%s' "$CT_JSON" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(int(bool(d.get("after"))), int(d["changed"]), d.get("after") or "")')"
+    read -r ct_found ct_changed ct_after <<<"$matched"
+    if [ "$ct_found" = 0 ]; then
+        el_warn "no crypttab entry for UUID=$UUID in $EL_CRYPTTAB (root may be unlocked via rd.luks.* kernel options); use --crypttab-add NAME to create one"
+    elif [ "$ct_changed" = 1 ]; then
+        if [ "$EL_DRY_RUN" = 1 ]; then
+            printf '[dry-run] crypttab entry would become: %s\n' "$ct_after" >&2
+        else
+            el_log "crypttab updated: $ct_after"
+        fi
+    fi
+fi
+
+if [ "$MODE" != tang ] && [ -d /etc/initramfs-tools ] && ! command -v dracut >/dev/null 2>&1; then
+    el_warn "initramfs-tools detected: its cryptroot hook ignores tpm2-device=/fido2-device= for the root volume. Use a dracut or systemd-based initrd (default on Ubuntu >= 25.10) for TPM2 unlock of /."
+fi
+
+if [ "$REGEN" = 1 ]; then
+    if command -v dracut >/dev/null 2>&1; then
+        el_run dracut -f --regenerate-all
+    elif command -v update-initramfs >/dev/null 2>&1; then
+        el_run update-initramfs -u -k all
+    else
+        el_warn "no dracut or update-initramfs found; regenerate the initrd manually"
+    fi
+fi
+
+if [ "$JSON" = 1 ]; then
+    if [ "$EL_DRY_RUN" = 1 ] || [ "$SKIPPED" = 1 ]; then
+        cp "$WORK/before.json" "$WORK/final.json"
+    else
+        el_luks_dump "$DEVICE" "$WORK/final.json"
+    fi
+    el_py luks-summary "$WORK/final.json" >"$WORK/summary.json"
+    python3 - "$DEVICE" "$UUID" "$MODE" "$EL_DRY_RUN" "$SKIPPED" \
+        "${NEW_SLOTS[*]:-}" "${WIPED[*]:-}" "$CT_JSON" "$WORK/summary.json" <<'PY'
+import json, sys
+dev, uuid, mode, dry, skipped, new, wiped, ct, summ = sys.argv[1:10]
+with open(summ) as fh:
+    s = json.load(fh)
+print(json.dumps({
+    "device": dev, "luks_uuid": uuid, "mode": mode,
+    "dry_run": dry == "1", "skipped": skipped == "1",
+    "enrolled_slots": [int(x) for x in new.split()],
+    "wiped_slots": [int(x) for x in wiped.split()],
+    "crypttab": json.loads(ct),
+    "state": s,
+}, indent=2, sort_keys=True))
+PY
+fi

@@ -1,0 +1,18 @@
+## enterprise-linux audit baseline -- project components (layer 13 + Control API)
+## eld is the future control daemon (docs/CONTROL-API.md). Paths may not exist
+## yet; watches on missing parents are ignored (-i in 10-el-base.rules).
+
+## Policy and configuration written through the Control API
+-w /etc/el/ -p wa -k el_config
+## Device state, cached role mappings, hardening manifest
+-w /var/lib/el/ -p wa -k el_state
+## JIT elevation grants are rendered here by eld (PERMISSIONS.md §4)
+-w /etc/sudoers.d/ -p wa -k el_jit_sudoers
+## The daemon binary: replacement or execution outside systemd
+-w /usr/libexec/eld -p wax -k el_eld_bin
+-w /usr/bin/elctl -p wa -k el_eld_bin
+## API socket directory (runtime; created by systemd RuntimeDirectory=eld)
+-w /run/eld/ -p wa -k el_eld_socket
+## Unit file and hardening drop-ins
+-w /etc/systemd/system/eld.service.d/ -p wa -k el_eld_unit
+-w /usr/lib/systemd/system/eld.service -p wa -k el_eld_unit

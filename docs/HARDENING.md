@@ -1,6 +1,6 @@
 # Hardening, security mechanisms, and locked automatic updates
 
-**Status:** design only — nothing built. Baselines are implementation guides, **not certification claims**.  
+**Status:** design; first implementation in [`security/hardening/`](../security/hardening/README.md) (container-tested only, not hardware-tested). Baselines are implementation guides, **not certification claims**.  
 **Date:** 2026-10-28 (expanded from the original stub)  
 See `docs/ARCHITECTURE.md` §5.5 and §5.1. Related: [ENCRYPTION.md](ENCRYPTION.md), [PERMISSIONS.md](PERMISSIONS.md), [CONTROL-API.md](CONTROL-API.md).
 

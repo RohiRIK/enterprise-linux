@@ -1,0 +1,15 @@
+[Unit]
+Description=enterprise-linux: re-render role rules from the signed offline cache
+Documentation=file:///usr/share/doc/el/permissions/README.md
+After=local-fs.target sssd.service
+
+[Service]
+Type=oneshot
+# No --policy: renders from the cache, dropping elevated roles once offline.graceDays has passed.
+ExecStart=/usr/bin/el-perm-render --strict-visudo
+ProtectSystem=strict
+ReadWritePaths=/etc/sudoers.d /etc/polkit-1/rules.d /etc/security /etc/el/roles /var/lib/el/roles
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes

@@ -1,0 +1,142 @@
+# SELinux policy module skeleton for eld (layer 6, RHEL family).
+# Build: see selinux/build.sh and security/hardening/README.md.
+#
+# STATUS: skeleton for a daemon that does not exist yet. The domain is
+# declared "permissive" so a first real eld logs AVC denials instead of
+# breaking; collect them (ausearch -m AVC -c eld | audit2allow -R), fold the
+# needed rules in here, then remove the permissive line. Not hardware-tested.
+
+policy_module(eld, 0.1.0)
+
+########################################
+#
+# Declarations
+#
+
+type eld_t;
+type eld_exec_t;
+init_daemon_domain(eld_t, eld_exec_t)
+
+# Ship permissive until real AVC data exists (see header).
+permissive eld_t;
+
+# /etc/el -- policy documents and provider config (read only for eld)
+type eld_etc_t;
+files_config_file(eld_etc_t)
+
+# /var/lib/el -- applied policy, cached roles, hardening manifest
+type eld_var_lib_t;
+files_type(eld_var_lib_t)
+
+# /run/eld -- runtime directory
+type eld_var_run_t;
+files_pid_file(eld_var_run_t)
+
+# /run/eld/api.sock -- the Control API socket (distinct type so client
+# access can be granted to the socket without the rest of /run/eld)
+type eld_api_sock_t;
+files_type(eld_api_sock_t)
+
+# eld.service unit file
+type eld_unit_file_t;
+systemd_unit_file(eld_unit_file_t)
+
+########################################
+#
+# eld local policy
+#
+
+allow eld_t self:capability { chown dac_read_search fowner setgid setuid kill audit_write sys_ptrace };
+allow eld_t self:process { getsched setsched signal_perms };
+allow eld_t self:fifo_file rw_fifo_file_perms;
+allow eld_t self:unix_stream_socket create_stream_socket_perms;
+allow eld_t self:unix_dgram_socket create_socket_perms;
+allow eld_t self:netlink_audit_socket { create_netlink_socket_perms nlmsg_relay };
+
+# Own executable
+can_exec(eld_t, eld_exec_t)
+
+# Config: read only
+read_files_pattern(eld_t, eld_etc_t, eld_etc_t)
+list_dirs_pattern(eld_t, eld_etc_t, eld_etc_t)
+
+# State
+manage_dirs_pattern(eld_t, eld_var_lib_t, eld_var_lib_t)
+manage_files_pattern(eld_t, eld_var_lib_t, eld_var_lib_t)
+files_var_lib_filetrans(eld_t, eld_var_lib_t, dir)
+
+# Runtime dir + API socket
+manage_dirs_pattern(eld_t, eld_var_run_t, eld_var_run_t)
+manage_files_pattern(eld_t, eld_var_run_t, eld_var_run_t)
+manage_sock_files_pattern(eld_t, eld_var_run_t, eld_api_sock_t)
+filetrans_pattern(eld_t, eld_var_run_t, eld_api_sock_t, sock_file, "api.sock")
+files_pid_filetrans(eld_t, eld_var_run_t, dir, "eld")
+
+# Facts: /proc, /sys, peer processes (SO_PEERCRED -> /proc/<pid>)
+kernel_read_system_state(eld_t)
+kernel_read_network_state(eld_t)
+kernel_read_kernel_sysctls(eld_t)
+dev_read_sysfs(eld_t)
+domain_read_all_domains_state(eld_t)
+selinux_get_enforce_mode(eld_t)
+selinux_compute_access_vector(eld_t)
+seutil_read_config(eld_t)
+
+# Logging and audit
+logging_send_syslog_msg(eld_t)
+logging_send_audit_msgs(eld_t)
+
+auth_use_nsswitch(eld_t)
+miscfiles_read_localization(eld_t)
+files_read_etc_files(eld_t)
+
+# eld never reads user home content
+# (no userdom_* read interfaces granted on purpose)
+
+optional_policy(`
+	dbus_system_bus_client(eld_t)
+	dbus_connect_system_bus(eld_t)
+')
+
+optional_policy(`
+	policykit_dbus_chat(eld_t)
+')
+
+optional_policy(`
+	init_dbus_chat(eld_t)
+	systemd_dbus_chat_logind(eld_t)
+')
+
+optional_policy(`
+	firewalld_dbus_chat(eld_t)
+')
+
+optional_policy(`
+	networkmanager_dbus_chat(eld_t)
+')
+
+# cryptsetup runs as lvm_t in the Fedora/RHEL reference policy
+optional_policy(`
+	lvm_domtrans(eld_t)
+')
+
+# dnf/rpm transactions (updates provider)
+optional_policy(`
+	rpm_domtrans(eld_t)
+')
+
+# TODO: usbguard (IPC over libqb / D-Bus org.usbguard1), fapolicyd trust
+# updates, flatpak system helper -- add once the matching interfaces are
+# confirmed on the target RHEL minor release.
+
+########################################
+#
+# Clients of the Control API
+#
+# Any logged-in user domain may connect to the socket; authorization happens
+# inside eld (polkit + roles, CONTROL-API.md §6), not in SELinux.
+
+gen_require(`
+	attribute userdomain;
+')
+eld_stream_connect(userdomain)

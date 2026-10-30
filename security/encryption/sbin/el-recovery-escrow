@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+# el-recovery-escrow - generate, escrow and rotate LUKS2 recovery keys.
+#
+# Implements docs/ENCRYPTION.md §2 "Recovery key": generated on the device,
+# escrowed via a pluggable backend, never shown to the user, rotated after
+# every use. Escrow metadata (never the key) is kept in
+# $EL_STATE_DIR/escrow.json and is what `el-encryption-facts` reports.
+#
+# Order of operations for escrow/rotate (a key is never left un-escrowed):
+#   1. add a new recovery keyslot (systemd-cryptenroll --recovery-key, or
+#      cryptsetup luksAddKey with a locally generated key as fallback)
+#   2. hand the key to the backend; on failure, wipe the new slot and stop
+#   3. record metadata (slot, target, time, sha256 fingerprint)
+#   4. wipe the previous recovery slot(s)
+#
+# The key lives only in a 0700 directory on /run (tmpfs) and is shredded on
+# exit. It is never an argument of any command (not visible in ps), never
+# written to stdout/stderr, never logged.
+#
+# UNTESTED ON REAL HARDWARE. Exercised only with mocks and loop devices.
+set -euo pipefail
+
+_self="$(readlink -f "$0")"
+if [ -z "${EL_LIBDIR:-}" ]; then
+    if [ -f "$(dirname "$_self")/../lib/el-common.sh" ]; then
+        EL_LIBDIR="$(cd "$(dirname "$_self")/../lib" && pwd)"
+    else
+        EL_LIBDIR=/usr/lib/el/encryption
+    fi
+fi
+# shellcheck source=../lib/el-common.sh
+. "$EL_LIBDIR/el-common.sh"
+
+usage() {
+    cat <<'EOF'
+Usage: el-recovery-escrow COMMAND [options]
+
+Commands:
+  escrow     ensure DEV has an escrowed recovery key (no-op if it already has one)
+  rotate     create a new key, escrow it, then wipe the old recovery slot(s)
+  verify     check the escrow record against the device and the backend
+  mark-used  flag the key as used (helpdesk handed it out); next rotate --if-needed rotates
+  status     print escrow metadata (never the key)
+
+Options:
+  --device DEV            LUKS2 device (repeatable; default: every crypto_LUKS device from lsblk)
+  --backend NAME          file | vault | azure-keyvault | webhook (default: $EL_ESCROW_BACKEND)
+  --unlock-key-file FILE  existing passphrase/key file used to add the new slot
+  --unlock-tpm2           unlock with an existing TPM2 slot (systemd >= 256; for unattended rotation)
+  --if-needed             (rotate) only rotate when used, older than EL_RECOVERY_MAX_AGE_DAYS,
+                          or not escrowed
+  --fallback              generate the key locally + cryptsetup luksAddKey instead of systemd
+  --dry-run               print every state-changing command instead of running it
+  --json                  machine-readable output
+  -q, --quiet
+EOF
+}
+
+CMD="${1:-}"
+[ -n "$CMD" ] || { usage >&2; exit 64; }
+shift
+case "$CMD" in -h|--help) usage; exit 0 ;; escrow|rotate|verify|mark-used|status) ;;
+    *) usage >&2; el_die "unknown command: $CMD" 64 ;; esac
+
+DEVICES=() BACKEND="" UNLOCK_KEY_FILE="" UNLOCK_TPM2=0 IF_NEEDED=0 FALLBACK=0 JSON=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --device) DEVICES+=("$2"); shift 2 ;;
+        --backend) BACKEND="$2"; shift 2 ;;
+        --unlock-key-file) UNLOCK_KEY_FILE="$2"; shift 2 ;;
+        --unlock-tpm2) UNLOCK_TPM2=1; shift ;;
+        --if-needed) IF_NEEDED=1; shift ;;
+        --fallback) FALLBACK=1; shift ;;
+        --dry-run) EL_DRY_RUN=1; shift ;;
+        --json) JSON=1; shift ;;
+        -q|--quiet) EL_QUIET=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; el_die "unknown argument: $1" 64 ;;
+    esac
+done
+
+el_load_config
+BACKEND="${BACKEND:-${EL_ESCROW_BACKEND:-}}"
+STATE="$EL_STATE_DIR/escrow.json"
+MAX_AGE="${EL_RECOVERY_MAX_AGE_DAYS:-0}"
+[[ "$MAX_AGE" =~ ^[0-9]+$ ]] || el_die "EL_RECOVERY_MAX_AGE_DAYS must be an integer" 78
+[ "${EL_RECOVERY_FALLBACK:-0}" = 1 ] && FALLBACK=1
+
+el_require_root
+el_require_cmd python3
+
+if [ "$CMD" = status ] && [ "${#DEVICES[@]}" -eq 0 ]; then
+    el_py escrow-status --state "$STATE"
+    exit 0
+fi
+
+el_require_cmd cryptsetup
+if [ "${#DEVICES[@]}" -eq 0 ]; then
+    el_require_cmd lsblk
+    mapfile -t DEVICES < <(el_discover_luks)
+    [ "${#DEVICES[@]}" -gt 0 ] || el_die "no LUKS devices found; pass --device" 66
+fi
+
+backend_path() {
+    [ -n "$BACKEND" ] || el_die "no escrow backend configured (set EL_ESCROW_BACKEND or --backend)" 78
+    [[ "$BACKEND" =~ ^[a-z0-9-]+$ ]] || el_die "invalid backend name: $BACKEND" 64
+    local p="$EL_LIBDIR/escrow.d/$BACKEND"
+    [ -x "$p" ] || el_die "escrow backend not found or not executable: $p" 69
+    printf '%s' "$p"
+}
+
+trap el_cleanup_secrets EXIT
+el_secret_dir
+WORK="$EL_SECRET_DIR"
+umask 077
+
+MACHINE_ID="$(cat "$EL_MACHINE_ID_FILE" 2>/dev/null || echo unknown)"
+HOST="$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo unknown)"
+SDV="$(el_systemd_version)"
+if [ "$UNLOCK_TPM2" = 1 ] && [ "$SDV" -lt 256 ]; then
+    el_die "--unlock-tpm2 needs systemd >= 256 (found $SDV); use --unlock-key-file" 69
+fi
+RESULTS=()
+
+# Exports the per-call environment of a backend (see README.md, "Escrow backend contract").
+backend_env() {
+    export EL_LIBDIR EL_ESCROW_UUID="$1" EL_ESCROW_DEVICE="$2" EL_ESCROW_KEYSLOT="$3" \
+        EL_ESCROW_FINGERPRINT="$4" EL_ESCROW_HOSTNAME="$HOST" EL_ESCROW_MACHINE_ID="$MACHINE_ID" \
+        EL_ESCROW_WORK="$WORK"
+}
+
+slot_exists() {   # slot dumpfile
+    el_py luks-query "$2" keyslots | grep -qx "$1"
+}
+
+# Generate a new recovery keyslot; writes the key to $WORK/key (0600).
+# Prints the new keyslot id on stdout.
+generate_key() {
+    local dev="$1" before="$2" after="$WORK/after.json" rc=0
+    rm -f "$WORK/key" "$WORK/out" "$WORK/err"
+    if [ "$FALLBACK" = 0 ] && [ "$SDV" -ge 248 ] && { [ -z "$UNLOCK_KEY_FILE" ] || [ "$SDV" -ge 252 ]; }; then
+        local args=(--recovery-key)
+        [ -n "$UNLOCK_KEY_FILE" ] && args+=("--unlock-key-file=$UNLOCK_KEY_FILE")
+        [ "$UNLOCK_TPM2" = 1 ] && args+=("--unlock-tpm2-device=auto")
+        if [ "$EL_DRY_RUN" = 1 ]; then
+            el_run systemd-cryptenroll "${args[@]}" "$dev"
+            return 0
+        fi
+        [ "$EL_QUIET" = 1 ] || printf '+ %s (stdout captured, not shown)\n' \
+            "$(el_fmt_cmd systemd-cryptenroll "${args[@]}" "$dev")" >&2
+        # stdout carries the key, stderr a QR code of it: both go to files
+        # inside the private directory, never to the terminal.
+        systemd-cryptenroll "${args[@]}" "$dev" >"$WORK/out" 2>"$WORK/err" </dev/null || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            el_py redact <"$WORK/err" >&2 || true
+            el_shred "$WORK/out" "$WORK/err"
+            el_die "systemd-cryptenroll --recovery-key failed (rc=$rc)" 70
+        fi
+        el_py extract-key "$WORK/out" "$WORK/key" || {
+            el_shred "$WORK/out" "$WORK/err"
+            el_die "could not find a recovery key in systemd-cryptenroll output" 70
+        }
+        el_shred "$WORK/out" "$WORK/err"
+    else
+        el_py genkey "$WORK/key"
+        local addargs=(luksAddKey -q)
+        [ -n "$UNLOCK_KEY_FILE" ] && addargs+=(--key-file "$UNLOCK_KEY_FILE")
+        el_run cryptsetup "${addargs[@]}" "$dev" "$WORK/key"
+        [ "$EL_DRY_RUN" = 1 ] && return 0
+    fi
+    el_luks_dump "$dev" "$after"
+    local new
+    new="$(el_py list-diff "$(el_py luks-query "$before" keyslots | tr '\n' ' ')" \
+                           "$(el_py luks-query "$after" keyslots | tr '\n' ' ')" | head -n1)"
+    [ -n "$new" ] || el_die "no new keyslot appeared on $dev" 70
+    if [ "$(el_py luks-query "$after" "token-for-slot=$new" | head -n1)" = "" ]; then
+        # Fallback path: tag the slot so later runs recognise it as a recovery slot.
+        printf '{"type":"el-recovery","keyslots":["%s"]}' "$new" >"$WORK/token.json"
+        el_run cryptsetup token import --json-file "$WORK/token.json" "$dev" \
+            || el_warn "could not tag keyslot $new with an el-recovery token"
+        el_luks_dump "$dev" "$after"
+    fi
+    printf '%s\n' "$new"
+}
+
+rotate_device() {
+    local dev="$1" uuid="$2" before="$WORK/before.json" reason="$3"
+    local bpath fp new target tok
+    bpath="$(backend_path)"
+    mapfile -t old < <(el_py luks-query "$before" "slots-by-method=recovery-key")
+    el_log "$dev: rotating recovery key ($reason); old recovery slot(s): ${old[*]:-none}"
+
+    new="$(generate_key "$dev" "$before")"
+    if [ "$EL_DRY_RUN" = 1 ]; then
+        printf '[dry-run] %s escrow  (key passed via 0600 file in %s, never argv)\n' "$bpath" "$WORK" >&2
+        printf '[dry-run] record metadata in %s\n' "$STATE" >&2
+        [ "${#old[@]}" -eq 0 ] || el_wipe_slots "$dev" "${old[@]}"
+        RESULTS+=("{\"device\":\"$dev\",\"luks_uuid\":\"$uuid\",\"action\":\"rotate\",\"dry_run\":true}")
+        return 0
+    fi
+    fp="$(el_py fingerprint "$WORK/key")"
+    backend_env "$uuid" "$dev" "$new" "$fp"
+    export EL_ESCROW_KEY_FILE="$WORK/key"
+    local rc=0
+    target="$("$bpath" escrow </dev/null | tail -n1)" || rc=$?
+    unset EL_ESCROW_KEY_FILE
+    el_shred "$WORK/key"
+    if [ "$rc" -ne 0 ] || [ -z "$target" ]; then
+        el_warn "escrow backend '$BACKEND' did not confirm (rc=$rc); removing the un-escrowed slot $new"
+        el_wipe_slots "$dev" "$new"
+        el_audit "escrow FAILED for LUKS $uuid via $BACKEND; new slot $new wiped"
+        el_die "escrow failed for $dev" 75
+    fi
+    tok="$(el_py luks-query "$WORK/after.json" "token-for-slot=$new" | head -n1)"
+    el_py escrow-record --state "$STATE" --uuid "$uuid" --device "$dev" --keyslot "$new" \
+        --token-id "$tok" --backend "$BACKEND" --target "$target" --fingerprint "$fp" >/dev/null
+    el_audit "recovery key for LUKS $uuid escrowed via $BACKEND to $target (slot $new, sha256 $fp)"
+    local s wipe=()
+    for s in "${old[@]}"; do [ "$s" != "$new" ] && wipe+=("$s"); done
+    if [ "${#wipe[@]}" -gt 0 ]; then
+        el_wipe_slots "$dev" "${wipe[@]}"
+        el_audit "wiped old recovery slot(s) ${wipe[*]} on LUKS $uuid"
+    fi
+    el_log "$dev: recovery key escrowed to $target (slot $new)"
+    RESULTS+=("$(python3 -c 'import json,sys;print(json.dumps({"device":sys.argv[1],"luks_uuid":sys.argv[2],"action":"rotate","keyslot":int(sys.argv[3]),"target":sys.argv[4],"fingerprint_sha256":sys.argv[5],"wiped_slots":[int(x) for x in sys.argv[6].split()]}))' "$dev" "$uuid" "$new" "$target" "$fp" "${wipe[*]:-}")")
+}
+
+for dev in "${DEVICES[@]}"; do
+    el_assert_luks2 "$dev"
+    uuid="$(el_luks_uuid "$dev")"
+    el_luks_dump "$dev" "$WORK/before.json"
+    rec_slot="$(el_py escrow-get --state "$STATE" --uuid "$uuid" --field keyslot 2>/dev/null || true)"
+    present=false
+    if [ -n "$rec_slot" ] && slot_exists "$rec_slot" "$WORK/before.json"; then present=true; fi
+
+    case "$CMD" in
+        escrow)
+            if [ "$present" = true ]; then
+                el_log "$dev: recovery key already escrowed (slot $rec_slot); nothing to do"
+                RESULTS+=("{\"device\":\"$dev\",\"luks_uuid\":\"$uuid\",\"action\":\"none\",\"keyslot\":$rec_slot}")
+            else
+                rotate_device "$dev" "$uuid" "not escrowed"
+            fi ;;
+        rotate)
+            reason="requested"
+            if [ "$IF_NEEDED" = 1 ]; then
+                if [ "$present" = false ]; then
+                    reason="not escrowed"
+                elif ! reason="$(el_py escrow-due --state "$STATE" --uuid "$uuid" --max-age-days "$MAX_AGE")"; then
+                    el_log "$dev: rotation not due"
+                    RESULTS+=("{\"device\":\"$dev\",\"luks_uuid\":\"$uuid\",\"action\":\"none\"}")
+                    continue
+                fi
+            fi
+            rotate_device "$dev" "$uuid" "$reason" ;;
+        mark-used)
+            [ -n "$rec_slot" ] || el_die "$dev: no escrow record" 66
+            if [ "$EL_DRY_RUN" = 1 ]; then
+                printf '[dry-run] mark recovery key of %s as used in %s\n' "$uuid" "$STATE" >&2
+            else
+                el_py escrow-mark-used --state "$STATE" --uuid "$uuid"
+                el_audit "recovery key of LUKS $uuid marked as used; rotation pending"
+            fi ;;
+        verify|status)
+            backend_ok=null
+            if [ "$CMD" = verify ] && [ -n "$rec_slot" ]; then
+                fp="$(el_py escrow-get --state "$STATE" --uuid "$uuid" --field fingerprint_sha256)"
+                rb="$(el_py escrow-get --state "$STATE" --uuid "$uuid" --field backend)"
+                BACKEND="${BACKEND:-$rb}"
+                [ "$rb" = "$BACKEND" ] || el_warn "record was escrowed via $rb, verifying with $BACKEND"
+                bpath="$(backend_path)"
+                backend_env "$uuid" "$dev" "$rec_slot" "$fp"
+                export EL_ESCROW_TARGET
+                EL_ESCROW_TARGET="$(el_py escrow-get --state "$STATE" --uuid "$uuid" --field target)"
+                vrc=0; "$bpath" verify </dev/null >/dev/null || vrc=$?
+                case "$vrc" in 0) backend_ok=true ;; 3) backend_ok=null; el_warn "backend $BACKEND cannot verify" ;; *) backend_ok=false ;; esac
+            fi
+            due="$(el_py escrow-due --state "$STATE" --uuid "$uuid" --max-age-days "$MAX_AGE" || true)"
+            RESULTS+=("$(python3 - "$STATE" "$uuid" "$dev" "$present" "$backend_ok" "$due" <<'PY'
+import json, sys
+state, uuid, dev, present, bok, due = sys.argv[1:7]
+try:
+    rec = json.load(open(state)).get("volumes", {}).get(uuid, {})
+except FileNotFoundError:
+    rec = {}
+out = {"device": dev, "luks_uuid": uuid,
+       "escrowed": bool(rec) and present == "true",
+       "keyslot_present": present == "true",
+       "backend_verified": json.loads(bok),
+       "rotation_due": due or None}
+for k in ("keyslot", "backend", "target", "escrowed_at", "fingerprint_sha256", "used", "used_at"):
+    out[k] = rec.get(k)
+print(json.dumps(out, sort_keys=True))
+PY
+)")
+            if [ "$CMD" = verify ] && { [ "$present" = false ] || [ "$backend_ok" = false ]; }; then
+                VERIFY_FAILED=1
+            fi ;;
+    esac
+done
+
+if [ "$JSON" = 1 ] || [ "$CMD" = status ] || [ "$CMD" = verify ]; then
+    printf '%s\n' "${RESULTS[@]}" | python3 -c 'import json,sys;print(json.dumps([json.loads(l) for l in sys.stdin if l.strip()],indent=2,sort_keys=True))'
+fi
+[ "${VERIFY_FAILED:-0}" = 0 ] || exit 1

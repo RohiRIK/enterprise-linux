@@ -1,6 +1,6 @@
 # Permissions management
 
-**Status:** design only — nothing built.  
+**Status:** design; first implementation in [`security/permissions/`](../security/permissions/README.md) (container-tested only, not hardware-tested).  
 **Date:** 2026-10-28  
 **Related:** [IDENTITY.md](IDENTITY.md), [CONTROL-API.md](CONTROL-API.md), [HARDENING.md](HARDENING.md)
 

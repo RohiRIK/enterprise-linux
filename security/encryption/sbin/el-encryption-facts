@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""el-encryption-facts - report encryption facts as JSON (docs/ENCRYPTION.md §5).
+
+    facts: encryption.volumes[].{device, status, cipher, unlock_methods, tpm_pcrs}
+           encryption.recovery.{escrowed, escrow_target, last_rotated}
+
+Additional keys (luks_uuid, tpm_signed_pcrs, mountpoints, warnings,
+root_encrypted, unencrypted_mounts) are extensions; consumers must ignore
+unknown keys. Sources: `lsblk --json`, `cryptsetup luksDump
+--dump-json-metadata`, and the escrow metadata written by el-recovery-escrow.
+Never reads or prints key material.
+
+Intended to be called by the future `eld` encryption provider and by MDM
+custom-compliance wrappers. Python 3 stdlib only. Needs root to read LUKS
+headers; without it, volumes are reported with an "error" field.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+LIBDIR = os.environ.get("EL_LIBDIR") or (
+    os.path.join(HERE, "..", "lib") if os.path.exists(os.path.join(HERE, "..", "lib", "elcrypt.py"))
+    else "/usr/lib/el/encryption")
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.abspath(LIBDIR))
+import elcrypt  # noqa: E402
+
+BOOT_MOUNTS = {"/boot", "/boot/efi", "/efi"}
+PROBE_TYPES = {"disk", "part", "loop", "lvm", "md", "raid1", "raid5", "raid6", "raid10"}
+
+
+def run(cmd):
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return p.returncode, p.stdout, p.stderr
+
+
+def lsblk_tree(path=None):
+    if path:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    for col in ("MOUNTPOINTS", "MOUNTPOINT"):
+        rc, out, _ = run(["lsblk", "--json", "--paths", "-o",
+                          "NAME,PATH,TYPE,FSTYPE,UUID," + col])
+        if rc == 0:
+            return json.loads(out)
+    raise RuntimeError("lsblk failed")
+
+
+def mounts_of(node):
+    mps = node.get("mountpoints")
+    if mps is None:
+        mp = node.get("mountpoint")
+        mps = [mp] if mp else []
+    return [m for m in mps if m]
+
+
+def walk(nodes, ancestors=()):
+    for n in nodes or []:
+        yield n, ancestors
+        yield from walk(n.get("children"), ancestors + (n,))
+
+
+def descendant_mounts(node):
+    out = []
+    for n, _ in walk(node.get("children")):
+        out.extend(mounts_of(n))
+    return sorted(set(out))
+
+
+def load_state(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh).get("volumes", {})
+    except (OSError, ValueError):
+        return {}
+
+
+def volume_facts(node, state):
+    dev = node.get("path") or node.get("name")
+    vol = {
+        "device": dev,
+        "luks_uuid": node.get("uuid"),
+        "status": "encrypted",
+        "cipher": None,
+        "unlock_methods": [],
+        "tpm_pcrs": [],
+        "tpm_signed_pcrs": [],
+        "opened": False,
+        "mapper": None,
+        "mountpoints": descendant_mounts(node),
+        "warnings": [],
+    }
+    for c in node.get("children") or []:
+        if c.get("type") == "crypt":
+            vol["opened"] = True
+            vol["mapper"] = c.get("path") or c.get("name")
+    rc, _, _ = run(["cryptsetup", "isLuks", "--type", "luks2", dev])
+    if rc != 0:
+        vol["status"] = "encrypted-luks1"
+        vol["warnings"].append("LUKS1: TPM2/FIDO2 unlock unavailable, convert to LUKS2")
+        return vol
+    rc, out, err = run(["cryptsetup", "luksDump", "--dump-json-metadata", dev])
+    if rc != 0:
+        vol["error"] = "cannot read LUKS2 metadata (%s)" % (err.strip().splitlines() or ["?"])[-1]
+        return vol
+    s = elcrypt.summarize_luks(json.loads(out))
+    vol["cipher"] = s["cipher_spec"]
+    vol["unlock_methods"] = s["unlock_methods"]
+    vol["tpm_pcrs"] = s["tpm_pcrs"]
+    vol["tpm_signed_pcrs"] = s["tpm_signed_pcrs"]
+    vol["warnings"].extend(s["warnings"])
+    rec = state.get(vol["luks_uuid"] or "")
+    slots = {k["id"] for k in s["keyslots"]}
+    vol["recovery_escrowed"] = bool(rec) and rec.get("keyslot") in slots
+    return vol
+
+
+def collect(lsblk_json=None, state_path=None):
+    tree = lsblk_tree(lsblk_json)
+    state = load_state(state_path)
+    volumes = []
+    root_encrypted = False
+    unencrypted = []
+    for node, anc in walk(tree.get("blockdevices")):
+        if not node.get("fstype") and node.get("type") in PROBE_TYPES:
+            # No udev data (containers, early boot): ask cryptsetup directly.
+            path = node.get("path") or node.get("name")
+            if run(["cryptsetup", "isLuks", path])[0] == 0:
+                node["fstype"] = "crypto_LUKS"
+                if not node.get("uuid"):
+                    node["uuid"] = run(["cryptsetup", "luksUUID", path])[1].strip() or None
+        if node.get("fstype") == "crypto_LUKS":
+            volumes.append(volume_facts(node, state))
+        mps = mounts_of(node)
+        if not mps:
+            continue
+        under_crypt = any(a.get("type") == "crypt" for a in anc + (node,))
+        if "/" in mps and under_crypt:
+            root_encrypted = True
+        name = (node.get("name") or "").split("/")[-1]
+        if node.get("fstype") == "swap":
+            if not under_crypt and not name.startswith("zram"):
+                unencrypted.append("[SWAP]")
+            continue
+        for m in mps:
+            if not under_crypt and m not in BOOT_MOUNTS and m != "[SWAP]":
+                unencrypted.append(m)
+
+    luks = [v for v in volumes if v.get("luks_uuid")]
+    recs = [state[v["luks_uuid"]] for v in luks if v["luks_uuid"] in state]
+    escrowed = bool(luks) and all(v.get("recovery_escrowed") for v in luks)
+    targets = sorted({r.get("target") for r in recs if r.get("target")})
+    rotated = sorted(r.get("escrowed_at") for r in recs if r.get("escrowed_at"))
+    return {
+        "schema_version": 1,
+        "collected_at": elcrypt.isoformat(elcrypt.utcnow()),
+        "encryption": {
+            "volumes": volumes,
+            "root_encrypted": root_encrypted,
+            "unencrypted_mounts": sorted(set(unencrypted)),
+            "recovery": {
+                "escrowed": escrowed,
+                "escrow_target": targets[0] if len(targets) == 1 else (targets or None),
+                # oldest rotation across volumes = worst case for compliance
+                "last_rotated": rotated[0] if rotated else None,
+                "rotation_pending": any(r.get("used") for r in recs),
+            },
+        },
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--lsblk-json", help="read lsblk --json output from FILE (testing)")
+    ap.add_argument("--state", default=os.path.join(
+        os.environ.get("EL_STATE_DIR", "/var/lib/el/encryption"), "escrow.json"))
+    ap.add_argument("--compact", action="store_true", help="single-line JSON")
+    a = ap.parse_args()
+    try:
+        facts = collect(a.lsblk_json, a.state)
+    except (RuntimeError, OSError, ValueError) as e:
+        print(json.dumps({"schema_version": 1, "error": str(e)}))
+        return 1
+    print(json.dumps(facts, sort_keys=True, indent=None if a.compact else 2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
