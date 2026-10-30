@@ -25,7 +25,6 @@ etc/fapolicyd/rules.d/25-el-flatpak.rules	allowlist	fapolicyd	0644
 etc/fapolicyd/rules.d/35-el-writable-dirs.rules	allowlist	fapolicyd	0644
 etc/systemd/system/tmp.mount.d/50-el-options.conf	allowlist	any	0644
 etc/udisks2/mount_options.conf	allowlist	any	0644
-etc/dconf/db/local.d/01-el-media	allowlist	any	0644
 etc/usbguard/usbguard-daemon.conf	device	any	0600
 etc/polkit-1/rules.d/60-el-udisks.rules	device	any	0644
 etc/nftables/el-baseline.nft	network	nftables	0644
@@ -36,10 +35,6 @@ etc/systemd/resolved.conf.d/90-el.conf	network	any	0644
 etc/systemd/system/eld.service.d/50-el-sandbox.conf	sandbox	any	0644
 etc/systemd/coredump.conf.d/90-el.conf	sandbox	any	0644
 etc/security/limits.d/90-el-nocore.conf	sandbox	any	0644
-etc/dconf/db/local.d/00-el-screensaver	session	any	0644
-etc/dconf/db/local.d/locks/00-el-screensaver	session	any	0644
-etc/dconf/db/gdm.d/00-el-login-screen	session	any	0644
-etc/dconf/db/gdm.d/locks/00-el-login-screen	session	any	0644
 etc/lightdm/lightdm.conf.d/90-el.conf	session	any	0644
 etc/systemd/logind.conf.d/90-el.conf	session	any	0644
 etc/security/pwquality.conf.d/90-el.conf	session	any	0644

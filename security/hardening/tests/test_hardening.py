@@ -388,7 +388,6 @@ class ApplyOffline(unittest.TestCase):
                     "etc/nftables.conf", "etc/usbguard/usbguard-daemon.conf",
                     "etc/usbguard/rules.d/50-el-baseline.conf",
                     "etc/systemd/system/tmp.mount.d/50-el-options.conf",
-                    "etc/dconf/db/local.d/locks/00-el-screensaver",
                     "etc/aide/aide.conf.d/90_el_paths",
                     "etc/systemd/system-preset/40-el-hardening.preset"):
             self.assertTrue(self.exists(root, rel), rel)
@@ -413,7 +412,7 @@ class ApplyOffline(unittest.TestCase):
         self.assertRegex(fstab, r"(?m)^tmpfs\s+/tmp\s+tmpfs\s+\S*noexec")
         ld = read(os.path.join(root, "etc/login.defs"))
         self.assertIn("ENCRYPT_METHOD\tYESCRYPT", ld)
-        self.assertIn("system-db:local", read(os.path.join(root, "etc/dconf/profile/user")))
+        self.assertFalse(self.exists(root, "etc/dconf/profile/user"))  # owned by desktop/
         m = self.manifest(root)
         self.assertEqual(m["distro"]["family"], "debian")
         self.assertEqual(m["mac"], "apparmor")
@@ -527,7 +526,7 @@ class ApplyOffline(unittest.TestCase):
         self.assertFalse(self.exists(root, "etc/nftables/el-baseline.nft"))
         self.assertFalse(self.exists(root, "etc/sysctl.d/90-el-hardening.conf"))
         self.assertFalse(self.exists(root, "etc/systemd/system/ssh.service"))
-        self.assertFalse(self.exists(root, "etc/dconf/db/local.d/00-el-screensaver"))
+        self.assertFalse(self.exists(root, "etc/security/pwquality.conf.d/90-el.conf"))
         self.assertTrue(self.exists(root, "etc/audit/rules.d/10-el-base.rules"))
         m = self.manifest(root)
         self.assertEqual(m["layers_skipped"], ["kernel", "network", "session"])
@@ -687,6 +686,19 @@ class VerifyStubbed(unittest.TestCase):
             self.assertIn(want, ids)
         self.assertEqual({c["status"] for c in doc["checks"] if c["id"] == "mac.eld_confined"},
                          {"skip"})
+
+    def test_dconf_locks_from_desktop_layer(self):
+        # GNOME keys are owned by desktop/dconf; verify reads locks from any system db.
+        locks = ("/org/gnome/desktop/session/idle-delay\n"
+                 "/org/gnome/desktop/screensaver/lock-enabled\n")
+        root = self.applied_root(UBUNTU, extra={
+            "etc/dconf/db/enterprise-linux.d/locks/00-locked-security": locks})
+        self.stubs(self.common_ok())
+        _, doc = self.verify(root)
+        by_id = {c["id"]: c for c in doc["checks"]}
+        self.assertEqual(by_id["session.dconf_lock.org.gnome.desktop.session.idle-delay"]["status"], "pass")
+        self.assertEqual(by_id["session.dconf_lock.org.gnome.desktop.media-handling.autorun-never"]["status"], "fail")
+        self.assertNotIn("session.dconf_locks", by_id)
 
     def test_rhel_failures_detected(self):
         root = self.applied_root(RHEL, extra={"etc/fapolicyd/fapolicyd.conf": "permissive = 1\n",

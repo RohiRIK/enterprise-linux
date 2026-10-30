@@ -654,14 +654,9 @@ class Applier:
                          "24.04 has it in universe, RHEL does not ship it")
 
     def layer_session(self):
+        # GNOME dconf keys (screen lock, greeter, media autorun) are owned by desktop/dconf;
+        # el-harden-verify checks that they are locked.
         self.install_layer_files("session")
-        self.ensure_line("etc/dconf/profile/user", "system-db:local", "session",
-                         create_with=["user-db:user", "system-db:local"])
-        gdm_profile = ["user-db:user", "system-db:gdm"]
-        if self.family == "debian":
-            gdm_profile.append("file-db:/usr/share/gdm/greeter-dconf-defaults")
-        self.ensure_line("etc/dconf/profile/gdm", "system-db:gdm", "session",
-                         create_with=gdm_profile)
         gdm_conf = "etc/gdm3/custom.conf" if self.family == "debian" else "etc/gdm/custom.conf"
         # Only touch GDM config when GDM is installed (its directory exists)
         gdm_present = os.path.isdir(self.rpath(os.path.dirname(gdm_conf)))
@@ -689,10 +684,8 @@ class Applier:
                                sep=" = ")
             else:
                 self.ensure_kv("etc/security/faillock.conf", line, "", "session", flag=True)
-        if self.live:
-            self.run("session", ["dconf", "update"])
-            if self.family == "rhel":
-                self.run("session", ["authselect", "enable-feature", "with-faillock"])
+        if self.live and self.family == "rhel":
+            self.run("session", ["authselect", "enable-feature", "with-faillock"])
         if self.family == "debian":
             self.pending("session", "pam_faillock / pam_pwquality in the Ubuntu PAM stack "
                          "belongs to the identity layer (pam-auth-update profile)")

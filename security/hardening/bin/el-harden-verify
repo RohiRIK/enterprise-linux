@@ -16,6 +16,7 @@ always looked up on PATH. Exit: 0 no failures, 1 at least one fail, 2 usage.
 """
 import argparse
 import datetime
+import glob
 import json
 import os
 import re
@@ -434,19 +435,31 @@ class Verifier:
                     n += 1
         return n
 
+    def dconf_locks(self):
+        locks = set()
+        for lockdir in glob.glob(self.path("etc/dconf/db/*.d/locks")):
+            for name in sorted(os.listdir(lockdir)):
+                for line in (read_text(os.path.join(lockdir, name)) or "").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        locks.add(line)
+        return locks
+
     def check_session(self):
         layer = "session"
-        locks = read_text(self.path("etc/dconf/db/local.d/locks/00-el-screensaver")) or ""
-        for key in ("/org/gnome/desktop/session/idle-delay",
-                    "/org/gnome/desktop/screensaver/lock-enabled"):
-            ok = key in locks
-            self.add("session.dconf_lock%s" % key.replace("/", "."), layer,
-                     "dconf key locked: %s" % key, "pass" if ok else "fail", "locked",
-                     "locked" if ok else "not locked")
-        prof = read_text(self.path("etc/dconf/profile/user")) or ""
-        self.add("session.dconf_profile", layer, "dconf user profile reads system-db:local",
-                 "pass" if "system-db:local" in prof else "fail", "system-db:local",
-                 "present" if "system-db:local" in prof else "missing")
+        # dconf settings are owned by desktop/dconf; check any system db locks them.
+        if not os.path.isdir(self.path("etc/dconf/db")):
+            self.add("session.dconf_locks", layer, "GNOME screen-lock keys locked", "skip",
+                     "locked", "no dconf system databases (desktop layer not installed)")
+        else:
+            locks = self.dconf_locks()
+            for key in ("/org/gnome/desktop/session/idle-delay",
+                        "/org/gnome/desktop/screensaver/lock-enabled",
+                        "/org/gnome/desktop/media-handling/autorun-never"):
+                ok = key in locks
+                self.add("session.dconf_lock%s" % key.replace("/", "."), layer,
+                         "dconf key locked: %s" % key, "pass" if ok else "fail", "locked",
+                         "locked" if ok else "not locked")
         gdm = None
         for rel in ("etc/gdm3/custom.conf", "etc/gdm/custom.conf"):
             gdm = read_text(self.path(rel))
@@ -459,8 +472,9 @@ class Verifier:
             v = (ini_get(gdm, "daemon", "AutomaticLoginEnable") or "false").lower()
             self.add("session.no_autologin", layer, "GDM automatic login disabled",
                      "pass" if v in ("false", "0") else "fail", "false", v)
-        glocks = read_text(self.path("etc/dconf/db/gdm.d/locks/00-el-login-screen")) or ""
-        ok = "disable-user-list" in glocks
+        if gdm is None:
+            return
+        ok = "/org/gnome/login-screen/disable-user-list" in self.dconf_locks()
         self.add("session.gdm_user_list_hidden", layer, "Login screen user list disabled",
                  "pass" if ok else "fail", "locked true", "locked" if ok else "not locked")
 
