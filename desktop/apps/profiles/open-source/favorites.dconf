@@ -1,3 +1,0 @@
-# Tier: org default. Dock favorites for the open-source profile.
-[org/gnome/shell]
-favorite-apps=['firefox-esr.desktop', 'google-chrome.desktop', 'org.gnome.Nautilus.desktop', 'libreoffice-writer.desktop', 'libreoffice-calc.desktop', 'libreoffice-impress.desktop', 'org.mozilla.Thunderbird.desktop', 'org.enterpriselinux.Workplace.desktop']

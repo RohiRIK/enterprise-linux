@@ -3,13 +3,13 @@
 # default apps) into a root filesystem. Meant for the image build; it never
 # touches the running system unless you pass --root / explicitly.
 #
-#   desktop/install.sh --root /path/to/rootfs [--profile open-source|microsoft-365]
+#   desktop/install.sh --root /path/to/rootfs [--profile <catalog profile>]
 #                      [--branding desktop/branding/branding.conf]
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 root=""
-profile="open-source"
+profile="default"
 branding="$here/branding/branding.conf"
 
 usage() {
@@ -89,10 +89,10 @@ install -D -m 0644 "$here/branding/enterprise-linux-backgrounds.xml" \
 install -D -m 0644 "$branding" "$root/etc/enterprise-linux/branding.conf"
 
 if [ -x "$here/apps/install-apps.sh" ]; then
-  echo "==> default apps and browser policies (profile: $profile)"
+  echo "==> dock favorites (profile: $profile)"
   "$here/apps/install-apps.sh" --profile "$profile" --root "${root:-/}"
 else
-  echo "warning: desktop/apps/install-apps.sh not found; skipping default apps" >&2
+  echo "warning: desktop/apps/install-apps.sh not found; skipping dock favorites" >&2
 fi
 
 echo "==> Workplace IT app"

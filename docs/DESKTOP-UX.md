@@ -89,7 +89,7 @@ First cut lives in [`desktop/`](../desktop/README.md), GNOME only:
 
 - Tiers map to files in `desktop/dconf/db/enterprise-linux.d/` (`00-` locked, `10-`/`20-`/`30-` org default, `90-` hidden); a validator enforces that user-tier and accessibility keys are never locked.
 - Login screen branding in `desktop/dconf/db/gdm.d/`.
-- Two default-app profiles, **open-source** and **microsoft-365**, with Firefox ESR, Chrome, Edge and Chromium preinstalled and configured by managed policy ([`desktop/apps/`](../desktop/apps/README.md)).
+- Apps, browser policies and default apps come from the catalog profiles (`catalog/profiles/`, applied by `scripts/apps/elapps`). The desktop layer adds only the dock favorites for the same profile ([`desktop/apps/`](../desktop/apps/README.md)).
 - The IT app skeleton, working name **Workplace**, in [`desktop/workplace/`](../desktop/workplace/README.md), on demo data until `eld` exists.
 
 ## 8. Open questions

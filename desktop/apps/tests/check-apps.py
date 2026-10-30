@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-"""Checks for desktop/apps: JSON policies, mimeapps.list, favorites, installer."""
+"""Checks for desktop/apps: dock favorites stay in step with catalog/ (stdlib only)."""
 
-import configparser
-import json
 import os
 import re
 import subprocess
@@ -11,83 +9,63 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APPS = os.path.dirname(HERE)
+REPO = os.path.dirname(os.path.dirname(APPS))
+CATALOG = os.path.join(REPO, "catalog")
+# Launchers that come from the desktop layer itself, not from a catalog bundle.
+OWN = {"org.enterpriselinux.Workplace.desktop", "org.gnome.Nautilus.desktop"}
 errors = []
 
 
-def no_dupes(pairs):
-    keys = [k for k, _ in pairs]
-    dupes = {k for k in keys if keys.count(k) > 1}
-    if dupes:
-        raise ValueError("duplicate keys: %s" % sorted(dupes))
-    return dict(pairs)
+def profile_bundles(name):
+    text = open(os.path.join(CATALOG, "profiles", name + ".yaml"), encoding="utf-8").read()
+    m = re.search(r"^\s*bundles:\s*\[([^\]]*)\]", text, re.M)
+    return [b.strip() for b in m.group(1).split(",")] if m else []
 
 
-def readme_ids():
-    text = open(os.path.join(APPS, "README.md"), encoding="utf-8").read()
-    return set(re.findall(r"`([\w.+-]+\.desktop)`", text))
+profiles = sorted(f[:-5] for f in os.listdir(os.path.join(CATALOG, "profiles")) if f.endswith(".yaml"))
+favorites = sorted(f[:-6] for f in os.listdir(os.path.join(APPS, "favorites")) if f.endswith(".dconf"))
+if profiles != favorites:
+    errors.append("favorites %s do not match catalog profiles %s" % (favorites, profiles))
 
+for name in favorites:
+    text = open(os.path.join(APPS, "favorites", name + ".dconf"), encoding="utf-8").read()
+    m = re.search(r"^favorite-apps=\[(.*)\]$", text, re.M)
+    if not m:
+        errors.append("%s: no favorite-apps" % name)
+        continue
+    ids = re.findall(r"'([^']+)'", m.group(1))
+    for must in OWN:
+        if must not in ids:
+            errors.append("%s: missing %s" % (name, must))
+    if name not in profiles:
+        continue
+    bundle_text, todo, seen = "", profile_bundles(name), set()
+    while todo:  # follow `includes:` of meta bundles
+        b = todo.pop()
+        path = os.path.join(CATALOG, "bundles", b + ".yaml")
+        if b in seen or not os.path.isfile(path):
+            continue
+        seen.add(b)
+        text = open(path, encoding="utf-8").read()
+        bundle_text += text
+        inc = re.search(r"^\s*includes:\s*\[([^\]]*)\]", text, re.M)
+        if inc:
+            todo += [x.strip() for x in inc.group(1).split(",") if x.strip()]
+    for i in ids:
+        if i not in OWN and i not in bundle_text:
+            errors.append("%s: %s is not provided by any bundle of the profile" % (name, i))
 
-known = readme_ids()
-for dirpath, _, files in os.walk(APPS):
-    for name in files:
-        path = os.path.join(dirpath, name)
-        rel = os.path.relpath(path, APPS)
-        if name.endswith(".json"):
-            try:
-                json.load(open(path), object_pairs_hook=no_dupes)
-            except ValueError as exc:
-                errors.append("%s: %s" % (rel, exc))
-        elif name == "mimeapps.list":
-            cp = configparser.ConfigParser(strict=True, interpolation=None)
-            cp.optionxform = str
-            try:
-                cp.read(path)
-            except configparser.Error as exc:
-                errors.append("%s: %s" % (rel, exc))
-                continue
-            if cp.sections() != ["Default Applications"]:
-                errors.append("%s: expected only [Default Applications]" % rel)
-                continue
-            for mime, app in cp["Default Applications"].items():
-                if "/" not in mime or not app.endswith(".desktop"):
-                    errors.append("%s: bad entry %s=%s" % (rel, mime, app))
-                elif app not in known:
-                    errors.append("%s: %s not in README desktop-id table" % (rel, app))
-        elif name == "favorites.dconf":
-            text = open(path).read()
-            m = re.search(r"^favorite-apps=\[(.*)\]$", text, re.M)
-            if not m:
-                errors.append("%s: no favorite-apps" % rel)
-                continue
-            ids = re.findall(r"'([^']+)'", m.group(1))
-            for must in ("org.enterpriselinux.Workplace.desktop", "org.gnome.Nautilus.desktop"):
-                if must not in ids:
-                    errors.append("%s: missing %s" % (rel, must))
-            for i in ids:
-                if i not in known:
-                    errors.append("%s: %s not in README desktop-id table" % (rel, i))
-
-expected = [
-    "etc/xdg/mimeapps.list",
-    "etc/dconf/db/enterprise-linux.d/20-favorites",
-    "etc/firefox/policies/policies.json",
-    "etc/opt/chrome/policies/managed/enterprise-linux.json",
-    "etc/opt/edge/policies/managed/enterprise-linux.json",
-    "etc/chromium/policies/managed/enterprise-linux.json",
-]
-for profile in sorted(os.listdir(os.path.join(APPS, "profiles"))):
+for name in favorites:
     with tempfile.TemporaryDirectory() as root:
-        r = subprocess.run([os.path.join(APPS, "install-apps.sh"), "--profile", profile, "--root", root],
+        r = subprocess.run([os.path.join(APPS, "install-apps.sh"), "--profile", name, "--root", root],
                            capture_output=True, text=True)
         if r.returncode:
-            errors.append("install-apps.sh %s failed: %s" % (profile, r.stderr.strip()))
+            errors.append("install-apps.sh %s failed: %s" % (name, r.stderr.strip()))
             continue
-        for f in expected:
-            if not os.path.isfile(os.path.join(root, f)):
-                errors.append("install-apps.sh %s: missing %s" % (profile, f))
-        if profile == "microsoft-365" and not os.path.isfile(
-                os.path.join(root, "etc/opt/edge/policies/managed/edge-m365.json")):
-            errors.append("microsoft-365: Edge web-app overlay not installed")
+        written = sorted(os.path.relpath(os.path.join(d, f), root)
+                         for d, _, fs in os.walk(root) for f in fs)
+        if written != ["etc/dconf/db/enterprise-linux.d/20-favorites"]:
+            errors.append("install-apps.sh %s wrote %s (must only write the favorites)" % (name, written))
 
 r = subprocess.run([os.path.join(APPS, "install-apps.sh"), "--profile", "nope", "--root", "/nonexistent"],
                    capture_output=True, text=True)
@@ -96,5 +74,5 @@ if r.returncode == 0:
 
 for e in errors:
     print("FAIL", e)
-print("check-apps: %d problem(s)" % len(errors))
+print("check-apps: %d profile(s), %d problem(s)" % (len(favorites), len(errors)))
 sys.exit(1 if errors else 0)

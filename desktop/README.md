@@ -10,7 +10,7 @@ desktop/
 ├── install.sh            # one entry point for the image build
 ├── dconf/                # GNOME settings by tier (system dconf database)
 ├── branding/             # wallpaper, login logo, banner text, org name
-├── apps/                 # default apps + managed browser policies, two profiles
+├── apps/                 # dock favorites per catalog profile
 ├── workplace/            # IT self-service app (GTK 4 / libadwaita skeleton)
 └── tests/                # validate-dconf.py, test-install.sh
 ```
@@ -18,7 +18,8 @@ desktop/
 ## Install
 
 ```sh
-desktop/install.sh --root /path/to/rootfs --profile open-source      # or microsoft-365
+scripts/apps/elapps apply --profile open-source --root /path/to/rootfs  # apps, browser policies, default apps
+desktop/install.sh --root /path/to/rootfs --profile open-source         # same profile name
 desktop/install.sh --root /path/to/rootfs --branding /path/to/acme-branding.conf
 # then, inside the target: dconf update
 ```
@@ -63,15 +64,14 @@ Edit `branding/branding.conf` (org name, login banner, colour, support contact)
 and replace the SVGs. Values fill `@KEY@` markers in the dconf files at install
 time and are copied to `/etc/enterprise-linux/branding.conf` for Workplace.
 
-## Default apps and browsers
+## Apps, browsers and default apps
 
-Two profiles, both with several browsers preinstalled and configured
-(Firefox ESR, Google Chrome, Microsoft Edge, Chromium where native):
-
-- **open-source**: Firefox ESR default, LibreOffice, Thunderbird.
-- **microsoft-365**: Edge default, Word/Excel/PowerPoint/Outlook/Teams as Edge web apps, LibreOffice for local files.
-
-Details: [`apps/README.md`](apps/README.md).
+These come from the curated catalog, not from this directory. `catalog/`
+decides which apps and browsers are installed, `policies/` holds the browser
+and Microsoft 365 policies, and the profile's `defaults:` set
+`/etc/xdg/mimeapps.list`. All of it is applied by `scripts/apps/elapps`.
+`desktop/` only adds the dock favorites for the same profile name. See
+[`apps/README.md`](apps/README.md).
 
 ## Workplace (IT app)
 
