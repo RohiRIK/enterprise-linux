@@ -1,0 +1,10 @@
+#!/bin/sh
+# State, audit log and accounts stay on remove; purge drops state and logs.
+set -e
+if [ "$1" = purge ]; then
+  rm -rf /var/lib/eld /var/log/eld
+fi
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null || true
+fi
+exit 0
