@@ -112,11 +112,14 @@ impl Config {
 impl Config {
     /// Pins every service principal to a uid (review finding M3).
     ///
-    /// A principal given by `user` only is resolved against the local
-    /// `/etc/passwd` text in `passwd` and must be a system account
-    /// (1..=`sys_uid_max`). A directory account (SSSD/authd) with the same
-    /// name, or a regular local user, never becomes a service principal.
-    /// If both `user` and `uid` are set they must agree with /etc/passwd.
+    /// Every principal must be an account listed in the local `/etc/passwd`
+    /// file itself (`passwd` is that file's text, parsed directly, never
+    /// NSS/getent) with a system uid (1..=`sys_uid_max`). A uid in range is
+    /// not enough on its own: directory providers can map low uids too.
+    /// A principal given by `user` is pinned to that entry's uid; one given
+    /// by `uid` only must have an entry with that uid; if both are set they
+    /// must agree. A directory account (SSSD/authd) or a regular local user
+    /// never becomes a service principal.
     /// Principals that cannot be pinned are dropped; the returned messages
     /// say why.
     pub fn pin_service_principals(&mut self, passwd: &str, sys_uid_max: u32) -> Vec<String> {
@@ -127,9 +130,29 @@ impl Config {
             })
         };
         let mut warnings = vec![];
+        let local_uid = |uid: u32| {
+            passwd.lines().any(|l| {
+                let f: Vec<&str> = l.split(':').collect();
+                f.len() > 2 && !f[0].is_empty() && f[2].parse::<u32>().ok() == Some(uid)
+            })
+        };
         self.service_principals.retain_mut(|sp| {
+            let why = match sp.uid.filter(|_| sp.user.is_empty()) {
+                Some(u) if !local_uid(u) => {
+                    Some(format!("uid {u} is not in /etc/passwd (directory accounts are refused)"))
+                }
+                Some(u) if u == 0 || u > sys_uid_max => {
+                    Some(format!("uid {u} is not a system uid (1..={sys_uid_max})"))
+                }
+                Some(_) => return true,
+                None => None,
+            };
+            if let Some(why) = why {
+                warnings.push(format!("service principal {} disabled: {why}", sp.name));
+                return false;
+            }
             if sp.user.is_empty() {
-                return sp.uid.is_some();
+                return false;
             }
             let why = match (local(&sp.user), sp.uid) {
                 (None, _) => format!("{} is not in /etc/passwd (directory accounts are refused)", sp.user),
@@ -202,7 +225,8 @@ mod tests {
             role: Role::SvcMdm,
         };
         let passwd = "root:x:0:0::/root:/bin/sh\nel-agent:x:990:990::/nonexistent:/usr/sbin/nologin\n\
-                      alice:x:1000:1000::/home/alice:/bin/sh\nagent2:x:991:991::/:/sbin/nologin\n";
+                      alice:x:1000:1000::/home/alice:/bin/sh\nagent2:x:991:991::/:/sbin/nologin\n\
+                      edr:x:777:777::/:/sbin/nologin\n";
         let mut c = Config {
             service_principals: vec![
                 sp("el-agent", None),
@@ -211,13 +235,18 @@ mod tests {
                 sp("root", None),
                 sp("agent2", Some(500)),
                 sp("", Some(777)),
+                // uid-only principals: a low uid that is not in the file
+                // (a directory account mapped below SYS_UID_MAX) is refused,
+                // as is a regular uid that is.
+                sp("", Some(900)),
+                sp("", Some(1000)),
             ],
             ..Config::default()
         };
         let w = c.pin_service_principals(passwd, sys_uid_max("SYS_UID_MIN 100\nSYS_UID_MAX   999\n"));
         let kept: Vec<_> = c.service_principals.iter().map(|p| (p.user.as_str(), p.uid)).collect();
         assert_eq!(kept, vec![("el-agent", Some(990)), ("", Some(777))]);
-        assert_eq!(w.len(), 4, "{w:?}");
+        assert_eq!(w.len(), 6, "{w:?}");
         assert!(w[0].contains("directory accounts are refused"));
         assert_eq!(sys_uid_max(""), 999);
     }

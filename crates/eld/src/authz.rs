@@ -300,10 +300,15 @@ mod tests {
         std::fs::create_dir_all(root.join("etc")).unwrap();
         std::fs::write(root.join("etc/passwd"), "root:x:0:0::/root:/bin/sh\n").unwrap();
         std::fs::write(root.join("etc/group"), "").unwrap();
-        // el-agent exists only in the directory (SSSD/authd), uid 5000.
+        // el-agent exists only in the directory (SSSD/authd): once with a
+        // regular uid, once mapped to a low uid inside the system range.
         let h = Host::fake(
             &root,
-            FakeRunner::new().on("getent passwd 5000", 0, "el-agent:*:5000:5000::/home/el-agent:/bin/bash\n"),
+            FakeRunner::new().on("getent passwd 5000", 0, "el-agent:*:5000:5000::/home/el-agent:/bin/bash\n").on(
+                "getent passwd 900",
+                0,
+                "el-agent:*:900:900::/home/el-agent:/bin/bash\n",
+            ),
         );
         let mut cfg = Config::default();
         cfg.service_principals.push(ServicePrincipal {
@@ -316,11 +321,23 @@ mod tests {
         assert_eq!(w.len(), 1);
         let store = Store::memory();
         let r = Resolver { sys: &h, config: &cfg, store: &store, now: 100 };
-        let c = r.resolve(&peer(5000, 5000, &[]));
-        assert_eq!(c.user, "el-agent");
-        assert_eq!(c.roles, vec![Role::User]);
-        assert!(c.principal.is_empty());
-        assert_eq!(c.source, Source::User);
+        for uid in [5000, 900] {
+            let c = r.resolve(&peer(uid, uid, &[]));
+            assert_eq!(c.user, "el-agent");
+            assert_eq!(c.roles, vec![Role::User]);
+            assert!(c.principal.is_empty());
+            assert_eq!(c.source, Source::User);
+        }
+        // Pinning by uid alone does not help a directory account either.
+        let mut cfg = Config::default();
+        cfg.service_principals.push(ServicePrincipal {
+            name: "m".into(),
+            user: String::new(),
+            uid: Some(900),
+            role: Role::SvcMdm,
+        });
+        assert_eq!(cfg.pin_service_principals("root:x:0:0::/root:/bin/sh\n", 999).len(), 1);
+        assert!(cfg.service_principals.is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
