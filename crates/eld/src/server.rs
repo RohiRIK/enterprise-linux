@@ -689,10 +689,64 @@ fn commit_error(e: CommitError) -> Response {
     }
 }
 
-// asm-generic values (x86_64, aarch64, riscv64, ...); libc does not export
-// them for every target.
-const SO_PEERSEC: libc::c_int = 31;
-const SO_PEERGROUPS: libc::c_int = 59;
+// SO_PEERSEC / SO_PEERGROUPS differ per architecture and libc does not
+// export them for every target, so they are spelled out here, verified
+// against torvalds/linux @ 067c5c24cef2 (2026-11-10):
+//   include/uapi/asm-generic/socket.h          31 / 59 (used by every arch
+//     without its own uapi socket.h: x86, arm, arm64, riscv, s390,
+//     loongarch; powerpc's socket.h includes asm-generic for these two)
+//   arch/mips/include/uapi/asm/socket.h        30 / 59
+//   arch/sparc/include/uapi/asm/socket.h       0x001e / 0x003d
+//   arch/alpha/include/uapi/asm/socket.h       30 / 59 (no Rust target)
+//   arch/parisc/include/uapi/asm/socket.h      0x401d / 0x4034 (no Rust target)
+// Any other architecture fails to build rather than guess: a wrong option
+// number might not fail closed.
+#[cfg(any(
+    target_arch = "x86",
+    target_arch = "x86_64",
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "riscv32",
+    target_arch = "riscv64",
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "s390x",
+    target_arch = "loongarch64"
+))]
+mod sockopt {
+    pub const SO_PEERSEC: libc::c_int = 31;
+    pub const SO_PEERGROUPS: libc::c_int = 59;
+}
+#[cfg(any(target_arch = "mips", target_arch = "mips64", target_arch = "mips32r6", target_arch = "mips64r6"))]
+mod sockopt {
+    pub const SO_PEERSEC: libc::c_int = 30;
+    pub const SO_PEERGROUPS: libc::c_int = 59;
+}
+#[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
+mod sockopt {
+    pub const SO_PEERSEC: libc::c_int = 0x001e;
+    pub const SO_PEERGROUPS: libc::c_int = 0x003d;
+}
+#[cfg(not(any(
+    target_arch = "x86",
+    target_arch = "x86_64",
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "riscv32",
+    target_arch = "riscv64",
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "s390x",
+    target_arch = "loongarch64",
+    target_arch = "mips",
+    target_arch = "mips64",
+    target_arch = "mips32r6",
+    target_arch = "mips64r6",
+    target_arch = "sparc",
+    target_arch = "sparc64"
+)))]
+compile_error!("eld: SO_PEERSEC/SO_PEERGROUPS values for this architecture are not verified; add them from arch/<arch>/include/uapi/asm/socket.h");
+use sockopt::{SO_PEERGROUPS, SO_PEERSEC};
 
 /// Peer credentials of a connected Unix socket, as the kernel recorded them
 /// at `connect()`: `SO_PEERCRED` (uid, gid, pid), `SO_PEERGROUPS`
@@ -929,6 +983,21 @@ mod tests {
         assert_eq!(d.conn_class(1000), ConnClass::User);
     }
 
+    /// L-12a: the per-arch option numbers match the kernel headers.
+    #[test]
+    fn peer_sockopt_numbers_match_kernel_headers() {
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))]
+        assert_eq!((SO_PEERSEC, SO_PEERGROUPS), (31, 59));
+        #[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
+        assert_eq!((SO_PEERSEC, SO_PEERGROUPS), (0x1e, 0x3d));
+        #[cfg(any(target_arch = "mips", target_arch = "mips64"))]
+        assert_eq!((SO_PEERSEC, SO_PEERGROUPS), (30, 59));
+        // On Linux the label read must not be confused with another option:
+        // a socketpair has no peer label without an LSM, or a real one.
+        let (a, _b) = UnixStream::pair().unwrap();
+        assert!(!peer_cred(&a).unwrap().label.contains('\u{fffd}'));
+    }
+
     #[test]
     fn users_cannot_write_settings() {
         let d = daemon();
@@ -1005,21 +1074,22 @@ mod tests {
 
         // Approving something nobody asked for does nothing.
         let approve = |user: &str, role: &str| json!({"params": {"user": user, "role": role}});
-        assert_eq!(run("roles.approve", approve("carol", "local-admin"), &hd).0, 400);
+        assert_eq!(run("roles.approve", approve("carol", "power-user"), &hd).0, 400);
         assert!(d.store.active_grants(now()).is_empty());
 
-        // A user asks; helpdesk approves; the grant carries the request.
-        let ask = json!({"params": {"role": "local-admin", "for": "30m", "ticket": "INC-1"}});
+        // A user asks; helpdesk approves (a lower role); the grant carries
+        // the request.
+        let ask = json!({"params": {"role": "power-user", "for": "30m", "ticket": "INC-1"}});
         assert_eq!(run("roles.request-temporary", ask.clone(), &alice).0, 200);
-        assert_eq!(run("roles.approve", approve("alice", "local-admin"), &hd).0, 200);
+        assert_eq!(run("roles.approve", approve("alice", "power-user"), &hd).0, 200);
         let gs = d.store.active_grants(now());
         assert_eq!((gs.len(), gs[0].user.as_str(), gs[0].ticket.as_str()), (1, "alice", "INC-1"));
         // The request is consumed.
-        assert_eq!(run("roles.approve", approve("alice", "local-admin"), &hd2).0, 400);
+        assert_eq!(run("roles.approve", approve("alice", "power-user"), &hd2).0, 400);
 
         // Nobody approves their own request.
         assert_eq!(run("roles.request-temporary", ask, &hd2).0, 200);
-        assert_eq!(run("roles.approve", approve("carol", "local-admin"), &hd2).0, 403);
+        assert_eq!(run("roles.approve", approve("carol", "power-user"), &hd2).0, 403);
 
         // Local admins may still grant directly, never to themselves; limits hold.
         assert_eq!(run("roles.grant-temporary", grant("dave", "helpdesk"), &admin).0, 200);
@@ -1028,6 +1098,35 @@ mod tests {
         assert_eq!(run("roles.grant-temporary", long, &admin).0, 400);
         let big = json!({"params": {"role": "helpdesk", "for": "5m", "reason": "x".repeat(300)}});
         assert_eq!(run("roles.request-temporary", big, &alice).0, 400);
+    }
+
+    /// L-12b: two helpdesk users cannot raise each other to local-admin via
+    /// request + approve; a local admin or the MDM agent can approve it.
+    #[test]
+    fn helpdesk_cannot_approve_local_admin() {
+        let d = daemon();
+        let bob = Caller { uid: 1001, ..caller("bob", &[Role::User, Role::Helpdesk], Source::User) };
+        let carol = Caller { uid: 1002, ..caller("carol", &[Role::User, Role::Helpdesk], Source::User) };
+        let admin = Caller { uid: 0, ..caller("root", &[Role::LocalAdmin], Source::LocalAdmin) };
+        let mdm = Caller { uid: 990, ..caller("el-agent", &[Role::SvcMdm], Source::Mdm) };
+        let run = |name: &str, body: Value, c: &Caller| call(&d, req("POST", &format!("/v1/actions/{name}"), body), c);
+        let ask = json!({"params": {"role": "local-admin", "for": "30m", "ticket": "INC-2"}});
+        let approve = |user: &str| json!({"params": {"user": user, "role": "local-admin"}});
+
+        assert_eq!(run("roles.request-temporary", ask.clone(), &bob).0, 200);
+        assert_eq!(run("roles.request-temporary", ask, &carol).0, 200);
+        assert_eq!(run("roles.approve", approve("bob"), &carol).0, 403);
+        assert_eq!(run("roles.approve", approve("carol"), &bob).0, 403);
+        assert!(d.store.active_grants(now()).is_empty());
+        // Helpdesk can still approve the lower helpdesk role.
+        let hd = json!({"params": {"role": "helpdesk", "for": "30m"}});
+        assert_eq!(run("roles.request-temporary", hd, &bob).0, 200);
+        assert_eq!(run("roles.approve", json!({"params": {"user": "bob", "role": "helpdesk"}}), &carol).0, 200);
+        // A local admin, or the MDM agent, can approve local-admin.
+        assert_eq!(run("roles.approve", approve("bob"), &admin).0, 200);
+        assert_eq!(run("roles.approve", approve("carol"), &mdm).0, 200);
+        let gs = d.store.active_grants(now());
+        assert_eq!(gs.iter().filter(|g| g.role == Role::LocalAdmin).count(), 2);
     }
 
     #[test]

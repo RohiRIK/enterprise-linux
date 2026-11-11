@@ -71,7 +71,7 @@ Four kinds of things, the same for every domain:
 | `os` | distro, version, image id, build hash, kernel | — | — |
 | `updates` | pending updates, last success, reboot required | ring, maintenance window, max deferral | check, install-now, rollback |
 | `identity` | joined IdP, last sync, cached users | allowed login groups, offline grace | resync |
-| `roles` | effective roles per user | role → group mapping | request-temporary (any user, for themselves), approve (helpdesk+), grant-temporary (local-admin/MDM only), revoke |
+| `roles` | effective roles per user | role → group mapping | request-temporary (any user, for themselves), approve (helpdesk+ for power-user/helpdesk; local-admin/MDM for local-admin), grant-temporary (local-admin/MDM only), revoke |
 | `apps` | installed apps + versions | bundles enabled, allowed catalog, blocked apps | install, remove, repair |
 | `encryption` | per-volume status, unlock method, escrow status | require encryption, TPM PCR policy, crypto profile | rotate-recovery-key, escrow-now |
 | `security` | MAC mode, allowlisting mode, firewall state, Secure Boot | baseline profile, firewall rules, USB policy | run-compliance-scan |
@@ -98,7 +98,7 @@ elctl settings diff -f policy.yaml                 # dry run
 elctl action run updates.install-now
 elctl action run encryption.rotate-recovery-key --escrow mdm
 elctl action run roles.request-temporary --role local-admin --for 30m --ticket INC-1234   # as alice
-elctl action run roles.approve --user alice@corp --role local-admin                   # as helpdesk
+elctl action run roles.approve --user alice@corp --role local-admin                   # as local-admin or MDM
 
 # Events
 elctl events follow --json                          # stream, for EDR/SIEM

@@ -24,7 +24,7 @@ Reference: Red Hat IdM centralizes **HBAC** (who may log in to which host) and *
 |---|---|---|---|
 | **user** | Every employee allowed on the device | Log in, use apps, install from the curated self-service catalog, change "user" tier desktop settings, connect allowed Wi-Fi/VPN, pair Bluetooth audio, print | Install arbitrary packages, change security settings, sudo |
 | **power-user** (optional) | Developers | Everything in *user* + rootless containers (Podman), developer bundle, local VMs, selected `elctl` actions (e.g. restart network) | Change security baseline, disable encryption/firewall/EDR |
-| **helpdesk** | IT support | Read all facts, collect logs, reset desktop settings, re-run policy, trigger updates, **approve** JIT requests | Read user files, disable security controls |
+| **helpdesk** | IT support | Read all facts, collect logs, reset desktop settings, re-run policy, trigger updates, **approve** JIT requests for power-user/helpdesk (local-admin requests need local-admin or MDM) | Read user files, disable security controls |
 | **local-admin** | IT Linux admins | Full `sudo`, all `elctl` actions except those reserved to MDM | Remove MDM/EDR agent or turn off audit (only MDM policy can) |
 | **break-glass** | Emergency only | Local root with a one-time password rotated and escrowed by MDM (LAPS-style) | Be used without generating a high-severity event |
 | **svc:mdm**, **svc:edr** | Agent service principals | Scoped API rights as defined in policy | Anything outside their scope |
@@ -65,7 +65,7 @@ Inspired by Windows LAPS / Endpoint Privilege Management and Red Hat IdM sudo ru
 
 1. User clicks **"Request admin"** in the desktop app (or `elctl request admin --reason ... --for 30m`).
 2. Request goes to the approver channel defined in policy: auto-approve for listed groups, helpdesk approval in the MDM/ITSM, or a ticket number.
-   In eld v0 this is `elctl action run roles.request-temporary --role local-admin --for 30m --ticket INC-1234` (any user, for themselves only). Helpdesk approves with `roles.approve --user alice --role local-admin`; nobody can approve their own request. **Helpdesk never grants a role on its own initiative**: a direct `roles.grant-temporary` without a request needs local-admin or the MDM (review finding M2). Pending requests expire after 1 hour and are held in memory.
+   In eld v0 this is `elctl action run roles.request-temporary --role local-admin --for 30m --ticket INC-1234` (any user, for themselves only). Approval is `roles.approve --user alice --role local-admin`. Helpdesk may approve power-user and helpdesk requests; a **local-admin** request needs a local admin or the MDM agent to approve, so two helpdesk users cannot raise each other to admin (review L-12b). Nobody can approve their own request. **Helpdesk never grants a role on its own initiative**: a direct `roles.grant-temporary` without a request needs local-admin or the MDM (review finding M2). Pending requests expire after 1 hour and are held in memory.
 3. On approval, `eld` grants the `local-admin` role for N minutes, writes a `roles.granted` event, and **revokes automatically** at expiry or logout.
 4. Optional: **command-scoped elevation** — approve only specific commands (e.g. install one `.deb`/`.rpm` from an allowed source) instead of a full shell.
 5. Optional: session recording (tlog, as in RHEL) for elevated shells.

@@ -123,48 +123,36 @@ impl Config {
     /// Principals that cannot be pinned are dropped; the returned messages
     /// say why.
     pub fn pin_service_principals(&mut self, passwd: &str, sys_uid_max: u32) -> Vec<String> {
-        let local = |name: &str| {
-            passwd.lines().find_map(|l| {
-                let f: Vec<&str> = l.split(':').collect();
-                (f.len() > 2 && f[0] == name).then(|| f[2].parse::<u32>().ok()).flatten()
-            })
-        };
+        let entries = passwd_entries(passwd);
+        let by_name = |n: &str| entries.iter().filter(|(name, _)| *name == n).map(|(_, u)| *u).collect::<Vec<_>>();
+        let by_uid = |u: u32| entries.iter().filter(|(_, uid)| *uid == u).count();
         let mut warnings = vec![];
-        let local_uid = |uid: u32| {
-            passwd.lines().any(|l| {
-                let f: Vec<&str> = l.split(':').collect();
-                f.len() > 2 && !f[0].is_empty() && f[2].parse::<u32>().ok() == Some(uid)
-            })
-        };
         self.service_principals.retain_mut(|sp| {
-            let why = match sp.uid.filter(|_| sp.user.is_empty()) {
-                Some(u) if !local_uid(u) => {
-                    Some(format!("uid {u} is not in /etc/passwd (directory accounts are refused)"))
+            let why = if sp.user.is_empty() {
+                let Some(u) = sp.uid else { return false };
+                match by_uid(u) {
+                    0 => format!("uid {u} is not in /etc/passwd (directory accounts are refused)"),
+                    1 if u == 0 || u > sys_uid_max => format!("uid {u} is not a system uid (1..={sys_uid_max})"),
+                    1 => return true,
+                    n => format!("uid {u} appears on {n} lines of /etc/passwd (ambiguous)"),
                 }
-                Some(u) if u == 0 || u > sys_uid_max => {
-                    Some(format!("uid {u} is not a system uid (1..={sys_uid_max})"))
-                }
-                Some(_) => return true,
-                None => None,
-            };
-            if let Some(why) = why {
-                warnings.push(format!("service principal {} disabled: {why}", sp.name));
-                return false;
-            }
-            if sp.user.is_empty() {
-                return false;
-            }
-            let why = match (local(&sp.user), sp.uid) {
-                (None, _) => format!("{} is not in /etc/passwd (directory accounts are refused)", sp.user),
-                (Some(u), _) if u == 0 || u > sys_uid_max => {
-                    format!("{} has uid {u}, not a system uid (1..={sys_uid_max})", sp.user)
-                }
-                (Some(u), Some(pinned)) if u != pinned => {
-                    format!("{} has uid {u} in /etc/passwd but the config pins uid {pinned}", sp.user)
-                }
-                (Some(u), _) => {
-                    sp.uid = Some(u);
-                    return true;
+            } else {
+                match (by_name(&sp.user).as_slice(), sp.uid) {
+                    ([], _) => format!("{} is not in /etc/passwd (directory accounts are refused)", sp.user),
+                    ([_, _, ..], _) => format!("{} appears more than once in /etc/passwd (ambiguous)", sp.user),
+                    ([u], _) if *u == 0 || *u > sys_uid_max => {
+                        format!("{} has uid {u}, not a system uid (1..={sys_uid_max})", sp.user)
+                    }
+                    ([u], Some(pinned)) if *u != pinned => {
+                        format!("{} has uid {u} in /etc/passwd but the config pins uid {pinned}", sp.user)
+                    }
+                    ([u], _) if by_uid(*u) > 1 => {
+                        format!("uid {u} of {} is shared with another /etc/passwd entry (ambiguous)", sp.user)
+                    }
+                    ([u], _) => {
+                        sp.uid = Some(*u);
+                        return true;
+                    }
                 }
             };
             warnings.push(format!("service principal {} disabled: {why}", sp.name));
@@ -172,6 +160,24 @@ impl Config {
         });
         warnings
     }
+}
+
+/// `(name, uid)` of each real entry in /etc/passwd text. Blank lines,
+/// comments and NIS compat lines (`#`, `+`, `-`) are skipped, as are lines
+/// without a numeric uid. Duplicates are kept so callers can refuse them.
+pub fn passwd_entries(passwd: &str) -> Vec<(&str, u32)> {
+    passwd
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty() && !l.starts_with(['#', '+', '-']))
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split(':').collect();
+            if f.len() < 3 || f[0].is_empty() {
+                return None;
+            }
+            Some((f[0], f[2].parse::<u32>().ok()?))
+        })
+        .collect()
 }
 
 /// `SYS_UID_MAX` from /etc/login.defs text, default 999.
@@ -249,6 +255,40 @@ mod tests {
         assert_eq!(w.len(), 6, "{w:?}");
         assert!(w[0].contains("directory accounts are refused"));
         assert_eq!(sys_uid_max(""), 999);
+    }
+
+    /// L-12c: comments and blanks are skipped; duplicate names or uids make
+    /// the principal ambiguous and it is disabled, never first-match.
+    #[test]
+    fn passwd_comments_and_duplicates() {
+        let sp = |name: &str, user: &str, uid: Option<u32>| ServicePrincipal {
+            name: name.into(),
+            user: user.into(),
+            uid,
+            role: Role::SvcMdm,
+        };
+        let passwd = "# el-agent:x:900:900::/:/sbin/nologin\n\n   \n#900\n+el-agent::901:901:::\n-x:x:902:902:::\n\
+                      dup:x:980:980::/:/sbin/nologin\ndup:x:981:981::/:/sbin/nologin\n\
+                      a1:x:970:970::/:/sbin/nologin\na2:x:970:970::/:/sbin/nologin\n\
+                      ok:x:960:960::/:/sbin/nologin\nbad:x:notanumber:1::/:/bin/sh\n";
+        assert_eq!(passwd_entries(passwd).len(), 5);
+        let mut c = Config {
+            service_principals: vec![
+                sp("commented", "el-agent", None),
+                sp("comment-uid", "", Some(900)),
+                sp("nis", "", Some(901)),
+                sp("dup-name", "dup", None),
+                sp("dup-uid", "a1", None),
+                sp("dup-uid-only", "", Some(970)),
+                sp("ok", "ok", None),
+            ],
+            ..Config::default()
+        };
+        let w = c.pin_service_principals(passwd, 999);
+        let kept: Vec<_> = c.service_principals.iter().map(|p| (p.name.as_str(), p.uid)).collect();
+        assert_eq!(kept, vec![("ok", Some(960))]);
+        assert_eq!(w.len(), 6, "{w:?}");
+        assert!(w.iter().filter(|m| m.contains("ambiguous")).count() == 3, "{w:?}");
     }
 
     #[test]

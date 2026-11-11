@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 
 use crate::audit::Auditor;
+use crate::authz::allowed;
 use crate::config::assignable;
 use crate::provider::{obj, param, ActionError, Env, Provider};
 use crate::store::{Grant, Store};
@@ -138,7 +139,7 @@ impl Provider for Roles {
             ActionSpec::new(
                 "roles.approve",
                 Role::Helpdesk,
-                "Approve another user's pending roles.request-temporary (JIT elevation). Effective for the eld API; sudo/polkit rule rendering is not built yet.",
+                "Approve another user's pending roles.request-temporary (JIT elevation). Requests for local-admin need local-admin or the MDM agent to approve. Effective for the eld API; sudo/polkit rule rendering is not built yet.",
             )
             .param(ParamSpec::new("user", "string", true, "User who asked"))
             .param(ParamSpec::new("role", "string", true, "Role they asked for")),
@@ -204,6 +205,14 @@ impl Provider for Roles {
                 let user = param(req, "user")?;
                 if env.caller.is_some_and(|c| c.user == user) {
                     return Err(ActionError::Forbidden("cannot approve your own request".into()));
+                }
+                // L-12b: helpdesk approves lower roles only. Raising someone
+                // to local-admin takes a local admin or the MDM agent, so two
+                // helpdesk users cannot make each other admin.
+                if role == Role::LocalAdmin && !env.caller.is_some_and(|c| allowed(&c.roles, Role::LocalAdmin)) {
+                    return Err(ActionError::Forbidden(
+                        "approving a local-admin request requires local-admin or the MDM agent".into(),
+                    ));
                 }
                 let mut q = self.pending.lock().unwrap();
                 q.retain(|r| env.now < r.requested_at + REQUEST_TTL_SECS);
