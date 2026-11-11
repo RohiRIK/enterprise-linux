@@ -1,6 +1,6 @@
 # eld and elctl: implementation notes (v0 prototype)
 
-**Status:** working prototype of the [Control API](CONTROL-API.md). Builds, runs and is tested (CI workflow ready in `dist/ci/`), but it is **not packaged into an image yet** and most settings are **recorded, not enforced** (see §4). Nothing here is a claim of a shipping product.  
+**Status:** working prototype of the [Control API](CONTROL-API.md). Builds, runs and is tested (CI: `.github/workflows/rust.yml`), but it is **not packaged into an image yet** and most settings are **recorded, not enforced** (see §4). Nothing here is a claim of a shipping product.  
 **Date:** 2026-10-29  
 **Language:** Rust (decided 2026-10-29, closes CONTROL-API.md open question 1)
 
@@ -26,7 +26,7 @@ crates/eld/                the daemon
 crates/elctl/              the CLI
 dist/systemd/eld.service   hardened unit
 dist/eld.json              example daemon config
-dist/ci/rust.yml           GitHub Actions workflow (fmt, clippy -D warnings, test, release build); copy to .github/workflows/
+.github/workflows/rust.yml GitHub Actions workflow (fmt, clippy -D warnings, test, release build)
 examples/policy.json       the CONTROL-API §4 policy as JSON (tested to apply cleanly)
 ```
 

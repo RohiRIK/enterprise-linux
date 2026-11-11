@@ -2,7 +2,7 @@
 
 Builds the enterprise-linux installer from the **official Ubuntu 26.04 LTS desktop ISO**. We never rebuild Ubuntu: the ISO's boot records, shim, GRUB and kernel stay as Canonical signed them, and we add an autoinstall file plus our payload. No ISO blobs in git.
 
-> **Status:** first implementation, 2026-10-30. Checked in a container: the eld `.deb` builds, installs and runs; `el-install-target` runs against a real Ubuntu 26.04 root tree (debootstrap); `el-build-uki` builds and signs a UKI from the real 26.04 kernel; the ISO remaster runs against the real 26.04.1 ISO, and the remastered ISO boots under UEFI Secure Boot (Microsoft keys) in QEMU into our GRUB entry and the 26.04.1 live session with the installer service started. **The full unattended install has not completed in a VM yet**: without KVM the emulated VM made no progress past the live session in 40 minutes, so whether the desktop installer picks up the autoinstall file is still unproven. That is what `dist/ci/image.yml` (with KVM) checks. Not tested on real hardware.
+> **Status:** first implementation, 2026-10-30. Checked in a container: the eld `.deb` builds, installs and runs; `el-install-target` runs against a real Ubuntu 26.04 root tree (debootstrap); `el-build-uki` builds and signs a UKI from the real 26.04 kernel; the ISO remaster runs against the real 26.04.1 ISO, and the remastered ISO boots under UEFI Secure Boot (Microsoft keys) in QEMU into our GRUB entry and the 26.04.1 live session with the installer service started. **The full unattended install has not completed in a VM yet**: without KVM the emulated VM made no progress past the live session in 40 minutes, so whether the desktop installer picks up the autoinstall file is still unproven. That is what `.github/workflows/image.yml` (with KVM) checks. Not tested on real hardware.
 
 ## Build
 
@@ -40,4 +40,4 @@ Stock Canonical-signed kernel, our command line (`lockdown=integrity module.sig_
 
 ## CI
 
-[`dist/ci/image.yml`](../dist/ci/image.yml) (copy to `.github/workflows/`): unit tests + shellcheck, then build a test ISO, install it into a QEMU VM with Secure Boot (Microsoft keys) and a software TPM, boot the installed disk, and check the first-boot report: stock kernel, `lockdown` active, module signatures enforced, Secure Boot on, eld running.
+[`.github/workflows/image.yml`](../.github/workflows/image.yml): unit tests + shellcheck, then build a test ISO, install it into a QEMU VM with Secure Boot (Microsoft keys) and a software TPM, boot the installed disk, and check the first-boot report: stock kernel, `lockdown` active, module signatures enforced, Secure Boot on, eld running.

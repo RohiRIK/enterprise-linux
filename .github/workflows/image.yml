@@ -1,6 +1,3 @@
-# Copy to .github/workflows/image.yml to enable CI (the automation that opened
-# this PR may not push workflow files).
-#
 # Builds the enterprise-linux installer ISO from the official Ubuntu 26.04
 # desktop ISO, installs it unattended into a VM with Secure Boot (Microsoft
 # keys, like a real laptop) and a software TPM, boots the installed disk and

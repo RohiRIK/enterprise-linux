@@ -1,8 +1,7 @@
 # Catalog — curated app bundles
 
 **Status:** first build of the bundle format. Manifests, policy files, and the
-installer exist. A CI workflow (`ci/catalog.workflow.yml`, to be moved into
-`.github/workflows/`) checks schema, references, and rendering on Ubuntu,
+installer exist. A CI workflow (`.github/workflows/catalog.yml`) checks schema, references, and rendering on Ubuntu,
 Debian, Fedora, AlmaLinux, and openSUSE containers. Nothing has been
 installed on a real image yet, and the substrate is not locked (see [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) §8).
 Marketplace plugins are still not live. Design background:

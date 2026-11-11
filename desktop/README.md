@@ -87,4 +87,4 @@ desktop/tests/test-install.sh          # needs dconf-cli + GNOME schemas
 (cd desktop/workplace && python3 -m unittest discover -s tests)
 ```
 
-CI for all of these is ready in `desktop/ci/desktop.yml`; copy it to `.github/workflows/` to enable it.
+CI for all of these runs in `.github/workflows/desktop.yml`.
