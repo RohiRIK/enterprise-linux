@@ -30,7 +30,7 @@ dist/ci/rust.yml           GitHub Actions workflow (fmt, clippy -D warnings, tes
 examples/policy.json       the CONTROL-API §4 policy as JSON (tested to apply cleanly)
 ```
 
-Dependencies are deliberately few: `serde`, `serde_json`, `libc` (for `SO_PEERCRED`/`SO_PEERGROUPS`/`SO_PEERSEC`). No async runtime, no HTTP framework: one thread per connection, capped at 64 in total. Ordinary users get at most 8 each and 56 together; the other 8 slots are reserved. Service principals (MDM/EDR agents, by uid) share those 8 reserved slots and can never hold more, so a compromised agent cannot starve root; root is bounded only by the 64 total. A request must be fully read within 10 seconds of `accept()` (a whole-request deadline, not a per-read timeout), so a client that drips bytes cannot hold a slot (review finding M1). Refused connections get `503`.
+Dependencies are deliberately few: `serde`, `serde_json`, `libc` (for `SO_PEERCRED`/`SO_PEERGROUPS`/`SO_PEERSEC`). No async runtime, no HTTP framework: one thread per connection, capped at 64 in total, split into three pools: 55 general slots for ordinary users (at most 8 per uid), 8 slots for service principals (MDM/EDR agents, matched by uid), which they can never exceed, and 1 slot reserved for root. Root may also use free general slots beyond its reserved one, but never the service share. So even with the user pool and the service pool both full, root still gets in, and a compromised agent cannot starve root or users. A request must be fully read within 10 seconds of `accept()` (a whole-request deadline, not a per-read timeout), so a client that drips bytes cannot hold a slot (review finding M1). Refused connections get `503`.
 
 ## 2. Build and try it
 

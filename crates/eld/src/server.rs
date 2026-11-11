@@ -32,15 +32,22 @@ const EVENTS_ROLE: Role = Role::Helpdesk;
 
 /// Connection limits (review finding M1: one local user must not be able to
 /// lock everyone else, the MDM agent and admins out of the API).
+///
+/// The `max_connections` slots are split into three pools: the service
+/// share (`reserved`), one or more slots only root may use
+/// (`root_reserved`), and the general pool for everyone else
+/// (`max_connections - reserved - root_reserved`, 55 by default). Root may
+/// also take free general slots, never the service share.
 #[derive(Debug, Clone)]
 pub struct Limits {
-    /// Concurrent connections served in total; more get 503. Root is
-    /// bounded by this alone.
+    /// Concurrent connections served in total; more get 503.
     pub max_connections: usize,
-    /// Slots kept back from ordinary users. Service principals (MDM/EDR
-    /// agents, matched by uid) share these and can never hold more, so a
-    /// compromised agent cannot starve root or users.
+    /// Service-principal share (MDM/EDR agents, matched by uid). They can
+    /// never hold more, so a compromised agent cannot starve root or users.
     pub reserved: usize,
+    /// Slots only root may use, so root always gets in even when the
+    /// general pool and the service share are both full.
+    pub root_reserved: usize,
     /// Concurrent connections per ordinary uid.
     pub per_uid: usize,
     /// Total time from accept to a fully read request (line, headers and
@@ -50,18 +57,32 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_connections: 64, reserved: 8, per_uid: 8, request_deadline: Duration::from_secs(10) }
+        Limits {
+            max_connections: 64,
+            reserved: 8,
+            root_reserved: 1,
+            per_uid: 8,
+            request_deadline: Duration::from_secs(10),
+        }
+    }
+}
+
+impl Limits {
+    /// Size of the general pool shared by ordinary users (and root's
+    /// overflow).
+    pub fn general(&self) -> usize {
+        self.max_connections.saturating_sub(self.reserved).saturating_sub(self.root_reserved)
     }
 }
 
 /// Who a connection counts against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnClass {
-    /// uid 0: only the total limit applies.
+    /// uid 0: its reserved slots, then free general slots.
     Root,
-    /// A service principal's uid: shares the reserved slots.
+    /// A service principal's uid: the service share only.
     Service,
-    /// Everyone else: the unreserved slots, `per_uid` each.
+    /// Everyone else: the general pool, `per_uid` each.
     User,
 }
 
@@ -73,21 +94,31 @@ pub struct Slots {
 
 #[derive(Debug, Default)]
 struct SlotState {
-    total: usize,
+    root: usize,
     service: usize,
     users: usize,
     per_uid: HashMap<u32, usize>,
+}
+
+impl SlotState {
+    /// General-pool slots in use: users plus root beyond its reserved ones.
+    fn general_used(&self, l: &Limits) -> usize {
+        self.users + self.root.saturating_sub(l.root_reserved)
+    }
 }
 
 impl Slots {
     /// Takes a slot for `uid`, or says why not.
     pub fn acquire(&self, l: &Limits, uid: u32, class: ConnClass) -> Result<(), &'static str> {
         let mut s = self.st.lock().unwrap();
-        if s.total >= l.max_connections {
-            return Err("too many connections");
-        }
+        let general_full = s.general_used(l) >= l.general();
         match class {
-            ConnClass::Root => {}
+            ConnClass::Root => {
+                if s.root >= l.root_reserved && general_full {
+                    return Err("too many connections");
+                }
+                s.root += 1;
+            }
             ConnClass::Service => {
                 if s.service >= l.reserved {
                     return Err("too many connections from service principals");
@@ -95,7 +126,7 @@ impl Slots {
                 s.service += 1;
             }
             ConnClass::User => {
-                if s.users >= l.max_connections.saturating_sub(l.reserved) {
+                if general_full {
                     return Err("too many connections");
                 }
                 if s.per_uid.get(&uid).copied().unwrap_or(0) >= l.per_uid {
@@ -105,16 +136,14 @@ impl Slots {
                 *s.per_uid.entry(uid).or_default() += 1;
             }
         }
-        s.total += 1;
         Ok(())
     }
 
     /// Returns a slot taken by [`Slots::acquire`].
     pub fn release(&self, uid: u32, class: ConnClass) {
         let mut s = self.st.lock().unwrap();
-        s.total = s.total.saturating_sub(1);
         match class {
-            ConnClass::Root => {}
+            ConnClass::Root => s.root = s.root.saturating_sub(1),
             ConnClass::Service => s.service = s.service.saturating_sub(1),
             ConnClass::User => {
                 s.users = s.users.saturating_sub(1);
@@ -829,8 +858,8 @@ mod tests {
     }
 
     /// Service principals share the reserved slots and cannot exceed them,
-    /// so a compromised agent cannot starve root; root is bounded only by
-    /// the total.
+    /// so a compromised agent cannot starve root; root has no per-uid cap
+    /// (its reserved slot plus free general slots).
     #[test]
     fn service_principals_capped_root_is_not() {
         use ConnClass::*;
@@ -848,6 +877,42 @@ mod tests {
         assert_eq!(s.acquire(&l, 0, Root), Err("too many connections"));
         s.release(990, Service);
         s.acquire(&l, 990, Service).unwrap();
+    }
+
+    /// CTO decision: one slot is reserved for root out of the general pool.
+    /// With 55 user connections and 8 service connections open, root still
+    /// gets in; it can use free general slots but never the service share.
+    #[test]
+    fn root_gets_in_when_user_and_service_pools_are_full() {
+        use ConnClass::*;
+        let l = Limits::default();
+        assert_eq!((l.general(), l.reserved, l.root_reserved), (55, 8, 1));
+        let s = Slots::default();
+        let mut users = 0;
+        let mut uid = 1000;
+        while s.acquire(&l, uid, User).is_ok() {
+            users += 1;
+            uid += 1;
+        }
+        assert_eq!(users, 55);
+        for _ in 0..l.reserved {
+            s.acquire(&l, 990, Service).unwrap();
+        }
+        assert!(s.acquire(&l, 991, Service).is_err());
+        s.acquire(&l, 0, Root).unwrap();
+        // Its reserved slot is taken and every other slot is full.
+        assert_eq!(s.acquire(&l, 0, Root), Err("too many connections"));
+        // A free general slot can go to root; then users wait for it.
+        s.release(1000, User);
+        s.acquire(&l, 0, Root).unwrap();
+        assert_eq!(s.acquire(&l, 1000, User), Err("too many connections"));
+        // Root never takes the service share.
+        s.release(990, Service);
+        assert_eq!(s.acquire(&l, 0, Root), Err("too many connections"));
+        s.acquire(&l, 990, Service).unwrap();
+        // Root releasing its overflow slot frees it for users again.
+        s.release(0, Root);
+        s.acquire(&l, 1000, User).unwrap();
     }
 
     #[test]

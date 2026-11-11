@@ -76,9 +76,10 @@ fn slow_clients_are_cut_off_and_capped_per_uid() {
     // SAFETY: getuid has no preconditions.
     let uid = unsafe { libc::getuid() };
     if uid == 0 {
-        // root is bounded only by the total.
+        // root has no per-uid cap: one reserved slot plus the general pool.
         d.limits.max_connections = 2;
         d.limits.reserved = 0;
+        d.limits.root_reserved = 1;
     }
     let d = Arc::new(d);
     let listener = UnixListener::bind(&sock).unwrap();
