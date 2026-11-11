@@ -30,7 +30,7 @@ dist/ci/rust.yml           GitHub Actions workflow (fmt, clippy -D warnings, tes
 examples/policy.json       the CONTROL-API §4 policy as JSON (tested to apply cleanly)
 ```
 
-Dependencies are deliberately few: `serde`, `serde_json`, `libc` (for `SO_PEERCRED`). No async runtime, no HTTP framework: one thread per connection, capped at 64.
+Dependencies are deliberately few: `serde`, `serde_json`, `libc` (for `SO_PEERCRED`/`SO_PEERGROUPS`/`SO_PEERSEC`). No async runtime, no HTTP framework: one thread per connection, capped at 64 in total, split into three pools: 55 general slots for ordinary users (at most 8 per uid), 8 slots for service principals (MDM/EDR agents, matched by uid), which they can never exceed, and 1 slot reserved for root. Root may also use free general slots beyond its reserved one, but never the service share. So even with the user pool and the service pool both full, root still gets in, and a compromised agent cannot starve root or users. A request must be fully read within 10 seconds of `accept()` (a whole-request deadline, not a per-read timeout), so a client that drips bytes cannot hold a slot (review finding M1). Refused connections get `503`.
 
 ## 2. Build and try it
 
@@ -43,7 +43,8 @@ elctl settings diff  -f examples/policy.json
 sudo elctl settings apply -f examples/policy.json
 elctl --json facts get compliance
 sudo elctl action run device.reboot --dry-run
-sudo elctl action run roles.grant-temporary --user alice --role local-admin --for 30m --ticket INC-1234
+elctl action run roles.request-temporary --role local-admin --for 30m --ticket INC-1234   # as alice
+elctl action run roles.approve --user alice --role local-admin                       # as helpdesk
 sudo elctl events follow --json
 ```
 
@@ -54,14 +55,14 @@ For development without root: `eld --config /dev/null --socket ./api.sock --stat
 | Area | v0 behaviour |
 |---|---|
 | Transport | REST/JSON over `/run/eld/api.sock`, no TCP listener. Endpoints exactly as CONTROL-API.md §4, plus `PATCH /v1/settings`, `DELETE /v1/settings/{key}`, `GET /v1/whoami`. |
-| AuthN | `SO_PEERCRED` (uid, gid, pid) + SELinux/AppArmor label from `/proc/<pid>/attr/current`. No tokens or passwords. |
-| Roles | root = local-admin; others = user, plus roles from `groupRoles` in config, policy keys `roles.<role>` (directory group names as surfaced by authd/SSSD), and unexpired JIT grants. MDM/EDR agents are service principals by Unix account. |
+| AuthN | Peer credentials captured once, right after `accept()` and before the request is read: `SO_PEERCRED` (uid, gid, pid), `SO_PEERGROUPS` (supplementary groups) and `SO_PEERSEC` (SELinux/AppArmor label). The kernel records these at `connect()`, so they cannot change while a client holds the socket open. eld never reads `/proc/<pid>` for authorization, because a pid can be reused by another user's process (pid-reuse race, review finding H1); the pid is kept for audit records only. If `SO_PEERGROUPS` is unavailable (Linux < 4.13) the caller gets its primary gid only. No tokens or passwords. |
+| Roles | root = local-admin; others = user, plus roles from `groupRoles` in config, policy keys `roles.<role>` (local group references only: `local:group:X` or a bare `X`; `entra:*` and other directory references match **nothing** until an identity-provider integration can resolve them by object id, and a warning is logged when they are loaded or applied, so a local group or user that happens to be named `X` never satisfies `entra:group:X`), and unexpired JIT grants. MDM/EDR agents are service principals, matched **by uid only**. A principal configured by `user` (e.g. `el-agent` in `dist/eld.json`) is pinned at startup to the uid of a *local system account* in `/etc/passwd` (uid 1..`SYS_UID_MAX`); a principal configured by `uid` alone must also have an entry in `/etc/passwd` with a system uid. `/etc/passwd` is parsed directly, never through NSS/`getent`, because directory providers can map low uids too. A directory account (SSSD/authd) or regular user is refused and the principal is disabled with a warning (review finding M3). The `el-eld` package's postinst creates `el-agent` as a system account and fails if the name already resolves from the directory or is a regular local user. |
 | AuthZ | Reads: any local user (encryption reads audited). Settings writes: local-admin or svc:mdm. Events: helpdesk+. Each action declares its minimum role. Destructive actions rate-limited. |
 | Precedence | Every stored value remembers its source; `mdm > local-admin > user`. Lower sources are rejected per key and a `settings.conflict` event is raised. A full policy `PUT` removes keys that source no longer sets. |
 | Policy | `DevicePolicy` JSON, validated per key against the schema, idempotent (second apply = all `unchanged`), dry run via `POST /v1/settings/diff`, optimistic concurrency via `ETag`/`If-Match`. Applied name/version reported as `policy` facts. |
 | Facts | 13 namespaces. Real readers for os-release, DMI, TPM, efivars Secure Boot, SELinux/AppArmor, firewalld/ufw/nftables, sshd, USBGuard, fapolicyd, auditd, apt/dnf/zypper pending updates and reboot state, lsblk + cryptsetup LUKS/TPM2 token detection, Flatpak and package inventory, NetworkManager VPN, authd/SSSD/Himmelblau, logind sessions. Anything unreadable is `"unknown"`, never a guess. |
 | Compliance | Rule engine over the other namespaces' facts (`compliance` facts + `compliance.evaluate`). Required rules set by `compliance.required`. |
-| Actions | Implemented: `device.lock/reboot/collect-logs`, `updates.check/install-now`, `apps.install/remove/repair` (allow-list + self-service policy enforced), `identity.resync` (SSSD), `security.run-compliance-scan` (OpenSCAP), `roles.grant-temporary/revoke`, `audit.export`, `compliance.evaluate`. Every mutating action supports `--dry-run`, which returns the exact native commands. |
+| Actions | Implemented: `device.lock/reboot/collect-logs`, `updates.check/install-now`, `apps.install/remove/repair` (allow-list + self-service policy enforced), `identity.resync` (SSSD), `security.run-compliance-scan` (OpenSCAP), `roles.request-temporary/approve/grant-temporary/revoke` (users request for themselves, helpdesk approves pending requests only, direct grants need local-admin or MDM), `audit.export`, `compliance.evaluate`. Every mutating action supports `--dry-run`, which returns the exact native commands. |
 | Audit | Every write, action, denial and event: who, process, polkit action id, old -> new, outcome. JSON lines (0600) + journald native protocol. |
 | Distro support | Branches on substrate family only (Debian/Ubuntu, RHEL-family, SUSE), never on a distro name. Tested on Ubuntu 24.04; RHEL paths are covered by fixture tests only. |
 
@@ -69,6 +70,7 @@ For development without root: `eld --config /dev/null --socket ./api.sock --stat
 
 - **Enforcement.** Every setting reports `"enforced": false` in `/v1/schema`. eld stores, validates, reports and evaluates compliance against them, but does not yet render USBGuard rules, firewall zones, dconf locks, sudoers/polkit rules, or PAM access from them.
 - **JIT grants** change what eld itself allows; they do not yet create sudo rights.
+- **Pending JIT requests** (`roles.request-temporary`) live only in eld's memory for 1 hour. They are dropped when the request expires or eld restarts. This fails closed: a lost request is never granted, and the user simply asks again. Only approved grants are persisted (`state.json`).
 - **Declared but refusing** (`implemented: false`): `device.wipe` (needs MDM-signed confirmation tokens), `encryption.rotate-recovery-key` / `escrow-now` (escrow target not chosen), `updates.rollback` (needs image-based substrate), `network.isolate` / `release-isolation`, `desktop.send-notification`.
 - **Transports and policy formats.** No D-Bus interface yet, so no polkitd delegation (polkit action ids are recorded in the audit log for when it lands). Policy files are JSON only; YAML needs a parser dependency we have not chosen.
 - **Confinement.** No SELinux/AppArmor profile for eld yet; the systemd unit is narrowed but eld still runs as root because the tools it wraps need it.

@@ -5,16 +5,15 @@ use eld_api::{
     code, result, severity, status, ActionRequest, ApplyResponse, Caller, DevicePolicy, Event, Object, Role,
 };
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, VecDeque};
-use std::io::{BufReader, Write};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::io::{BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::audit::Auditor;
-use crate::authz::{allowed, Resolver};
+use crate::authz::{allowed, PeerCred, Resolver};
 use crate::config::Config;
 use crate::events::Bus;
 use crate::http::{read_request, write_response, write_sse_head, Request, Response};
@@ -25,13 +24,158 @@ use crate::sys::System;
 
 /// Namespaces whose fact reads are audited (recovery-key metadata).
 const AUDITED_READS: &[&str] = &["encryption"];
-/// Concurrent connections served; more get 503.
-const MAX_CONNECTIONS: usize = 64;
 
 /// Role needed to write settings.
 const WRITE_ROLE: Role = Role::LocalAdmin;
 /// Role needed to read the event stream.
 const EVENTS_ROLE: Role = Role::Helpdesk;
+
+/// Connection limits (review finding M1: one local user must not be able to
+/// lock everyone else, the MDM agent and admins out of the API).
+///
+/// The `max_connections` slots are split into three pools: the service
+/// share (`reserved`), one or more slots only root may use
+/// (`root_reserved`), and the general pool for everyone else
+/// (`max_connections - reserved - root_reserved`, 55 by default). Root may
+/// also take free general slots, never the service share.
+#[derive(Debug, Clone)]
+pub struct Limits {
+    /// Concurrent connections served in total; more get 503.
+    pub max_connections: usize,
+    /// Service-principal share (MDM/EDR agents, matched by uid). They can
+    /// never hold more, so a compromised agent cannot starve root or users.
+    pub reserved: usize,
+    /// Slots only root may use, so root always gets in even when the
+    /// general pool and the service share are both full.
+    pub root_reserved: usize,
+    /// Concurrent connections per ordinary uid.
+    pub per_uid: usize,
+    /// Total time from accept to a fully read request (line, headers and
+    /// body), not per read, so a client dripping bytes is cut off.
+    pub request_deadline: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            max_connections: 64,
+            reserved: 8,
+            root_reserved: 1,
+            per_uid: 8,
+            request_deadline: Duration::from_secs(10),
+        }
+    }
+}
+
+impl Limits {
+    /// Size of the general pool shared by ordinary users (and root's
+    /// overflow).
+    pub fn general(&self) -> usize {
+        self.max_connections.saturating_sub(self.reserved).saturating_sub(self.root_reserved)
+    }
+}
+
+/// Who a connection counts against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnClass {
+    /// uid 0: its reserved slots, then free general slots.
+    Root,
+    /// A service principal's uid: the service share only.
+    Service,
+    /// Everyone else: the general pool, `per_uid` each.
+    User,
+}
+
+/// Admission control for [`Limits`].
+#[derive(Debug, Default)]
+pub struct Slots {
+    st: Mutex<SlotState>,
+}
+
+#[derive(Debug, Default)]
+struct SlotState {
+    root: usize,
+    service: usize,
+    users: usize,
+    per_uid: HashMap<u32, usize>,
+}
+
+impl SlotState {
+    /// General-pool slots in use: users plus root beyond its reserved ones.
+    fn general_used(&self, l: &Limits) -> usize {
+        self.users + self.root.saturating_sub(l.root_reserved)
+    }
+}
+
+impl Slots {
+    /// Takes a slot for `uid`, or says why not.
+    pub fn acquire(&self, l: &Limits, uid: u32, class: ConnClass) -> Result<(), &'static str> {
+        let mut s = self.st.lock().unwrap();
+        let general_full = s.general_used(l) >= l.general();
+        match class {
+            ConnClass::Root => {
+                if s.root >= l.root_reserved && general_full {
+                    return Err("too many connections");
+                }
+                s.root += 1;
+            }
+            ConnClass::Service => {
+                if s.service >= l.reserved {
+                    return Err("too many connections from service principals");
+                }
+                s.service += 1;
+            }
+            ConnClass::User => {
+                if general_full {
+                    return Err("too many connections");
+                }
+                if s.per_uid.get(&uid).copied().unwrap_or(0) >= l.per_uid {
+                    return Err("too many connections from this user");
+                }
+                s.users += 1;
+                *s.per_uid.entry(uid).or_default() += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns a slot taken by [`Slots::acquire`].
+    pub fn release(&self, uid: u32, class: ConnClass) {
+        let mut s = self.st.lock().unwrap();
+        match class {
+            ConnClass::Root => s.root = s.root.saturating_sub(1),
+            ConnClass::Service => s.service = s.service.saturating_sub(1),
+            ConnClass::User => {
+                s.users = s.users.saturating_sub(1);
+                if let Some(n) = s.per_uid.get_mut(&uid) {
+                    *n -= 1;
+                    if *n == 0 {
+                        s.per_uid.remove(&uid);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Reads from the socket until an absolute deadline, re-arming the socket
+/// timeout with the time left before every read.
+struct DeadlineReader<'a> {
+    s: &'a UnixStream,
+    until: Instant,
+}
+
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "request deadline exceeded"));
+        }
+        self.s.set_read_timeout(Some(left))?;
+        let mut s = self.s;
+        s.read(buf)
+    }
+}
 
 /// What a handler produces.
 pub enum Reply {
@@ -48,6 +192,8 @@ pub struct Daemon {
     pub bus: Arc<Bus>,
     pub config: Config,
     pub sys: Box<dyn System>,
+    pub limits: Limits,
+    slots: Slots,
     destructive: Mutex<VecDeque<u64>>,
 }
 
@@ -68,12 +214,32 @@ impl Daemon {
         config: Config,
         sys: Box<dyn System>,
     ) -> Daemon {
-        Daemon { reg, store, audit, bus, config, sys, destructive: Mutex::new(VecDeque::new()) }
+        let mut config = config;
+        // Pin service principals to local system uids (Sam M3).
+        let read = |p: &str| sys.read_file(p).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        let max = crate::config::sys_uid_max(&read("/etc/login.defs"));
+        for w in config.pin_service_principals(&read("/etc/passwd"), max) {
+            eprintln!("eld: {w}");
+        }
+        for w in crate::authz::unmatched_ref_warnings(&store) {
+            eprintln!("eld: {w}");
+        }
+        Daemon {
+            reg,
+            store,
+            audit,
+            bus,
+            config,
+            sys,
+            limits: Limits::default(),
+            slots: Slots::default(),
+            destructive: Mutex::new(VecDeque::new()),
+        }
     }
 
-    /// Resolves peer credentials into a caller.
-    pub fn caller(&self, uid: u32, gid: u32, pid: i32) -> Caller {
-        Resolver { sys: self.sys.as_ref(), config: &self.config, store: &self.store, now: now() }.resolve(uid, gid, pid)
+    /// Resolves accept-time peer credentials into a caller.
+    pub fn caller(&self, peer: &PeerCred) -> Caller {
+        Resolver { sys: self.sys.as_ref(), config: &self.config, store: &self.store, now: now() }.resolve(peer)
     }
 
     /// Publishes an event and writes it to the audit log.
@@ -309,6 +475,11 @@ impl Daemon {
                 Ok(e) => etag = e,
                 Err(e) => return commit_error(e),
             }
+            if changes.iter().any(|c| c.key.starts_with("roles.")) {
+                for w in crate::authz::unmatched_ref_warnings(&self.store) {
+                    eprintln!("eld: {w}");
+                }
+            }
             let detail = json!({"results": results, "dryRun": false});
             self.audit.record(Some(caller), "settings.write", target, "ok", crate::provider::obj(detail));
             for r in results.iter().filter(|r| r.result == result::REJECTED && r.reason.starts_with("set by")) {
@@ -414,28 +585,45 @@ impl Daemon {
         }
     }
 
+    /// Which connection limits apply to `uid`.
+    pub fn conn_class(&self, uid: u32) -> ConnClass {
+        if uid == 0 {
+            ConnClass::Root
+        } else if self.config.service_principals.iter().any(|sp| sp.uid == Some(uid)) {
+            ConnClass::Service
+        } else {
+            ConnClass::User
+        }
+    }
+
     /// Serves one connection: authenticate, read, route, reply.
     pub fn serve_conn(&self, stream: UnixStream) {
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-        let Some((uid, gid, pid)) = peer_cred(&stream) else { return };
+        let until = Instant::now() + self.limits.request_deadline;
+        let Some(peer) = peer_cred(&stream) else { return };
+        self.serve_peer(stream, &peer, until);
+    }
+
+    fn serve_peer(&self, stream: UnixStream, peer: &PeerCred, until: Instant) {
+        // Resolve roles now, from the credentials the kernel recorded at
+        // connect(), before the client sends a single byte (Sam H1).
+        let caller = self.caller(peer);
         let mut w = match stream.try_clone() {
             Ok(w) => w,
             Err(_) => return,
         };
-        let req = match read_request(&mut BufReader::new(stream)) {
+        let _ = w.set_write_timeout(Some(Duration::from_secs(30)));
+        let req = match read_request(&mut BufReader::new(DeadlineReader { s: &stream, until })) {
             Ok(r) => r,
             Err(resp) => {
                 let _ = write_response(&mut w, &resp);
                 return;
             }
         };
-        let caller = self.caller(uid, gid, pid);
         match self.handle(&req, &caller) {
             Reply::Full(resp) => {
                 let _ = write_response(&mut w, &resp);
             }
             Reply::Stream(backlog, rx) => {
-                let _ = w.set_write_timeout(Some(Duration::from_secs(30)));
                 if write_sse_head(&mut w).is_err() {
                     return;
                 }
@@ -468,22 +656,24 @@ impl Daemon {
         }
     }
 
-    /// Accept loop: one thread per connection, bounded.
+    /// Accept loop: one thread per connection, bounded in total and per
+    /// uid, with slots reserved for root and service principals.
     pub fn serve(self: Arc<Self>, listener: UnixListener) {
-        let active = Arc::new(AtomicUsize::new(0));
         for conn in listener.incoming() {
             let Ok(stream) = conn else { continue };
-            if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
-                active.fetch_sub(1, Ordering::SeqCst);
+            let until = Instant::now() + self.limits.request_deadline;
+            let Some(peer) = peer_cred(&stream) else { continue };
+            let class = self.conn_class(peer.uid);
+            if let Err(why) = self.slots.acquire(&self.limits, peer.uid, class) {
                 let mut s = stream;
-                let _ = write_response(&mut s, &Response::error(503, code::INTERNAL, "too many connections"));
+                let _ = s.set_write_timeout(Some(Duration::from_secs(1)));
+                let _ = write_response(&mut s, &Response::error(503, code::INTERNAL, why));
                 continue;
             }
             let d = Arc::clone(&self);
-            let a = Arc::clone(&active);
             std::thread::spawn(move || {
-                d.serve_conn(stream);
-                a.fetch_sub(1, Ordering::SeqCst);
+                d.serve_peer(stream, &peer, until);
+                d.slots.release(peer.uid, class);
             });
         }
     }
@@ -499,22 +689,69 @@ fn commit_error(e: CommitError) -> Response {
     }
 }
 
-/// `SO_PEERCRED` of a connected Unix socket: (uid, gid, pid).
-pub fn peer_cred(s: &UnixStream) -> Option<(u32, u32, i32)> {
+// asm-generic values (x86_64, aarch64, riscv64, ...); libc does not export
+// them for every target.
+const SO_PEERSEC: libc::c_int = 31;
+const SO_PEERGROUPS: libc::c_int = 59;
+
+/// Peer credentials of a connected Unix socket, as the kernel recorded them
+/// at `connect()`: `SO_PEERCRED` (uid, gid, pid), `SO_PEERGROUPS`
+/// (supplementary groups, Linux >= 4.13) and `SO_PEERSEC` (LSM label).
+/// If the groups cannot be read the caller gets its primary gid only, which
+/// fails closed.
+pub fn peer_cred(s: &UnixStream) -> Option<PeerCred> {
     use std::os::fd::AsRawFd;
+    let fd = s.as_raw_fd();
     let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     // SAFETY: cred and len are valid for writes and sized for SO_PEERCRED.
     let rc = unsafe {
-        libc::getsockopt(
-            s.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut cred as *mut libc::ucred).cast(),
-            &mut len,
-        )
+        libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, (&mut cred as *mut libc::ucred).cast(), &mut len)
     };
-    (rc == 0).then_some((cred.uid, cred.gid, cred.pid))
+    if rc != 0 {
+        return None;
+    }
+    Some(PeerCred {
+        uid: cred.uid,
+        gid: cred.gid,
+        pid: cred.pid,
+        groups: peer_groups(fd).unwrap_or_default(),
+        label: peer_label(fd),
+    })
+}
+
+fn peer_groups(fd: std::os::fd::RawFd) -> Option<Vec<u32>> {
+    const GID: usize = std::mem::size_of::<libc::gid_t>();
+    let mut n = 64usize;
+    loop {
+        let mut buf: Vec<libc::gid_t> = vec![0; n];
+        let mut len = (n * GID) as libc::socklen_t;
+        // SAFETY: buf holds n gid_t values and len is its size in bytes.
+        let rc = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, SO_PEERGROUPS, buf.as_mut_ptr().cast(), &mut len) };
+        if rc == 0 {
+            buf.truncate(len as usize / GID);
+            return Some(buf);
+        }
+        // ERANGE: len now holds the size needed (NGROUPS_MAX is 65536).
+        let need = len as usize / GID;
+        if std::io::Error::last_os_error().raw_os_error() == Some(libc::ERANGE) && need > n && need <= 65536 {
+            n = need;
+            continue;
+        }
+        return None;
+    }
+}
+
+fn peer_label(fd: std::os::fd::RawFd) -> String {
+    let mut buf = vec![0u8; 4096];
+    let mut len = buf.len() as libc::socklen_t;
+    // SAFETY: buf is valid for len bytes.
+    let rc = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, SO_PEERSEC, buf.as_mut_ptr().cast(), &mut len) };
+    if rc != 0 {
+        return String::new();
+    }
+    buf.truncate(len as usize);
+    String::from_utf8_lossy(&buf).trim_end_matches(['\0', '\n']).to_string()
 }
 
 #[cfg(test)]
@@ -575,6 +812,123 @@ mod tests {
         })
     }
 
+    /// Sam H1: groups are captured from the socket itself at accept.
+    #[test]
+    fn peer_cred_captures_groups_at_accept() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        let p = peer_cred(&a).unwrap();
+        // SAFETY: plain libc getters with valid buffers.
+        let (uid, gid, mut want) = unsafe {
+            let n = libc::getgroups(0, std::ptr::null_mut());
+            let mut g: Vec<libc::gid_t> = vec![0; n.max(0) as usize];
+            let n = libc::getgroups(n, g.as_mut_ptr());
+            g.truncate(n.max(0) as usize);
+            (libc::getuid(), libc::getgid(), g)
+        };
+        assert_eq!((p.uid, p.gid, p.pid), (uid, gid, std::process::id() as i32));
+        let mut got = p.groups.clone();
+        got.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(got, want);
+    }
+
+    /// Sam M1: one uid's connections cannot starve another uid, and the
+    /// reserved slots stay open for root and the MDM uid.
+    #[test]
+    fn one_uid_cannot_starve_others() {
+        use ConnClass::*;
+        let l = Limits::default();
+        let s = Slots::default();
+        for _ in 0..l.per_uid {
+            s.acquire(&l, 1000, User).unwrap();
+        }
+        assert_eq!(s.acquire(&l, 1000, User), Err("too many connections from this user"));
+        s.acquire(&l, 1001, User).unwrap();
+        // Many attacker uids fill every unreserved slot...
+        let mut uid = 2000;
+        while s.acquire(&l, uid, User).is_ok() {
+            uid += 1;
+        }
+        assert_eq!(s.acquire(&l, 5000, User), Err("too many connections"));
+        // ...but root and the MDM agent still get in.
+        s.acquire(&l, 0, Root).unwrap();
+        s.acquire(&l, 990, Service).unwrap();
+        s.release(1000, User);
+        s.acquire(&l, 1000, User).unwrap();
+    }
+
+    /// Service principals share the reserved slots and cannot exceed them,
+    /// so a compromised agent cannot starve root; root has no per-uid cap
+    /// (its reserved slot plus free general slots).
+    #[test]
+    fn service_principals_capped_root_is_not() {
+        use ConnClass::*;
+        let l = Limits::default();
+        let s = Slots::default();
+        for i in 0..l.reserved {
+            s.acquire(&l, 990 + (i as u32 % 2), Service).unwrap();
+        }
+        assert_eq!(s.acquire(&l, 990, Service), Err("too many connections from service principals"));
+        assert_eq!(s.acquire(&l, 991, Service), Err("too many connections from service principals"));
+        // Root fills everything that is left, past any per-uid or reserved cap.
+        for _ in l.reserved..l.max_connections {
+            s.acquire(&l, 0, Root).unwrap();
+        }
+        assert_eq!(s.acquire(&l, 0, Root), Err("too many connections"));
+        s.release(990, Service);
+        s.acquire(&l, 990, Service).unwrap();
+    }
+
+    /// CTO decision: one slot is reserved for root out of the general pool.
+    /// With 55 user connections and 8 service connections open, root still
+    /// gets in; it can use free general slots but never the service share.
+    #[test]
+    fn root_gets_in_when_user_and_service_pools_are_full() {
+        use ConnClass::*;
+        let l = Limits::default();
+        assert_eq!((l.general(), l.reserved, l.root_reserved), (55, 8, 1));
+        let s = Slots::default();
+        let mut users = 0;
+        let mut uid = 1000;
+        while s.acquire(&l, uid, User).is_ok() {
+            users += 1;
+            uid += 1;
+        }
+        assert_eq!(users, 55);
+        for _ in 0..l.reserved {
+            s.acquire(&l, 990, Service).unwrap();
+        }
+        assert!(s.acquire(&l, 991, Service).is_err());
+        s.acquire(&l, 0, Root).unwrap();
+        // Its reserved slot is taken and every other slot is full.
+        assert_eq!(s.acquire(&l, 0, Root), Err("too many connections"));
+        // A free general slot can go to root; then users wait for it.
+        s.release(1000, User);
+        s.acquire(&l, 0, Root).unwrap();
+        assert_eq!(s.acquire(&l, 1000, User), Err("too many connections"));
+        // Root never takes the service share.
+        s.release(990, Service);
+        assert_eq!(s.acquire(&l, 0, Root), Err("too many connections"));
+        s.acquire(&l, 990, Service).unwrap();
+        // Root releasing its overflow slot frees it for users again.
+        s.release(0, Root);
+        s.acquire(&l, 1000, User).unwrap();
+    }
+
+    #[test]
+    fn connection_classes() {
+        let mut d = daemon();
+        d.config.service_principals.push(crate::config::ServicePrincipal {
+            name: "mdm".into(),
+            user: String::new(),
+            uid: Some(990),
+            role: Role::SvcMdm,
+        });
+        assert_eq!(d.conn_class(0), ConnClass::Root);
+        assert_eq!(d.conn_class(990), ConnClass::Service);
+        assert_eq!(d.conn_class(1000), ConnClass::User);
+    }
+
     #[test]
     fn users_cannot_write_settings() {
         let d = daemon();
@@ -628,13 +982,52 @@ mod tests {
         let (st, v) = call(&d, req("POST", "/v1/actions/device.lock", json!({"dryRun": true})), &hd);
         assert_eq!(st, 200);
         assert_eq!(v["status"], "dry-run");
-        // JIT: helpdesk can grant to others, never to itself.
-        let grant = |user: &str| json!({"params": {"user": user, "role": "local-admin", "for": "30m"}});
-        assert_eq!(call(&d, req("POST", "/v1/actions/roles.grant-temporary", grant("bob")), &hd).0, 403);
-        assert_eq!(call(&d, req("POST", "/v1/actions/roles.grant-temporary", grant("alice")), &hd).0, 200);
-        assert_eq!(d.store.active_grants(now()).len(), 1);
+    }
+
+    /// Sam M2: helpdesk never grants roles on its own initiative; it can
+    /// only approve another user's pending request.
+    #[test]
+    fn helpdesk_cannot_grant_only_approve() {
+        let d = daemon();
+        let alice = caller("alice", &[Role::User], Source::User);
+        let hd = Caller { uid: 1001, ..caller("bob", &[Role::User, Role::Helpdesk], Source::User) };
+        let hd2 = Caller { uid: 1002, ..caller("carol", &[Role::User, Role::Helpdesk], Source::User) };
+        let admin = Caller { uid: 0, ..caller("root", &[Role::LocalAdmin], Source::LocalAdmin) };
+        let run = |name: &str, body: Value, c: &Caller| call(&d, req("POST", &format!("/v1/actions/{name}"), body), c);
+        let grant = |user: &str, role: &str| json!({"params": {"user": user, "role": role, "for": "30m"}});
+
+        // Direct grants: refused for helpdesk, for any role and any target.
+        for role in ["local-admin", "helpdesk", "power-user"] {
+            assert_eq!(run("roles.grant-temporary", grant("alice", role), &hd).0, 403);
+            assert_eq!(run("roles.grant-temporary", grant("carol", role), &hd).0, 403);
+        }
+        assert!(d.store.active_grants(now()).is_empty());
+
+        // Approving something nobody asked for does nothing.
+        let approve = |user: &str, role: &str| json!({"params": {"user": user, "role": role}});
+        assert_eq!(run("roles.approve", approve("carol", "local-admin"), &hd).0, 400);
+        assert!(d.store.active_grants(now()).is_empty());
+
+        // A user asks; helpdesk approves; the grant carries the request.
+        let ask = json!({"params": {"role": "local-admin", "for": "30m", "ticket": "INC-1"}});
+        assert_eq!(run("roles.request-temporary", ask.clone(), &alice).0, 200);
+        assert_eq!(run("roles.approve", approve("alice", "local-admin"), &hd).0, 200);
+        let gs = d.store.active_grants(now());
+        assert_eq!((gs.len(), gs[0].user.as_str(), gs[0].ticket.as_str()), (1, "alice", "INC-1"));
+        // The request is consumed.
+        assert_eq!(run("roles.approve", approve("alice", "local-admin"), &hd2).0, 400);
+
+        // Nobody approves their own request.
+        assert_eq!(run("roles.request-temporary", ask, &hd2).0, 200);
+        assert_eq!(run("roles.approve", approve("carol", "local-admin"), &hd2).0, 403);
+
+        // Local admins may still grant directly, never to themselves; limits hold.
+        assert_eq!(run("roles.grant-temporary", grant("dave", "helpdesk"), &admin).0, 200);
+        assert_eq!(run("roles.grant-temporary", grant("root", "helpdesk"), &admin).0, 403);
         let long = json!({"params": {"user": "alice", "role": "local-admin", "for": "48h"}});
-        assert_eq!(call(&d, req("POST", "/v1/actions/roles.grant-temporary", long), &hd).0, 400);
+        assert_eq!(run("roles.grant-temporary", long, &admin).0, 400);
+        let big = json!({"params": {"role": "helpdesk", "for": "5m", "reason": "x".repeat(300)}});
+        assert_eq!(run("roles.request-temporary", big, &alice).0, 400);
     }
 
     #[test]

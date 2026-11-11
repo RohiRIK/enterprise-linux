@@ -71,7 +71,7 @@ Four kinds of things, the same for every domain:
 | `os` | distro, version, image id, build hash, kernel | — | — |
 | `updates` | pending updates, last success, reboot required | ring, maintenance window, max deferral | check, install-now, rollback |
 | `identity` | joined IdP, last sync, cached users | allowed login groups, offline grace | resync |
-| `roles` | effective roles per user | role → group mapping | grant-temporary (JIT), revoke |
+| `roles` | effective roles per user | role → group mapping | request-temporary (any user, for themselves), approve (helpdesk+), grant-temporary (local-admin/MDM only), revoke |
 | `apps` | installed apps + versions | bundles enabled, allowed catalog, blocked apps | install, remove, repair |
 | `encryption` | per-volume status, unlock method, escrow status | require encryption, TPM PCR policy, crypto profile | rotate-recovery-key, escrow-now |
 | `security` | MAC mode, allowlisting mode, firewall state, Secure Boot | baseline profile, firewall rules, USB policy | run-compliance-scan |
@@ -97,7 +97,8 @@ elctl settings diff -f policy.yaml                 # dry run
 # Actions
 elctl action run updates.install-now
 elctl action run encryption.rotate-recovery-key --escrow mdm
-elctl action run roles.grant-temporary --user alice@corp --role local-admin --for 30m --ticket INC-1234
+elctl action run roles.request-temporary --role local-admin --for 30m --ticket INC-1234   # as alice
+elctl action run roles.approve --user alice@corp --role local-admin                   # as helpdesk
 
 # Events
 elctl events follow --json                          # stream, for EDR/SIEM
@@ -161,7 +162,7 @@ Policies are **declarative and idempotent**: applying the same document twice ch
 
 ## 6. Security of the API itself
 
-- **AuthN:** Unix peer credentials (UID, PID, SELinux/AppArmor label of the caller). No passwords or tokens on the local socket.
+- **AuthN:** Unix peer credentials (UID, GID, supplementary groups, SELinux/AppArmor label) as the kernel recorded them at `connect()` (`SO_PEERCRED`, `SO_PEERGROUPS`, `SO_PEERSEC`). The PID is logged for audit but never used to look up groups or labels, because PIDs can be reused. No passwords or tokens on the local socket.
 - **Unprivileged read of compliance facts:** the `user` role may read the non-sensitive `compliance` subset, because MDM compliance scripts (e.g. Intune discovery scripts) run in the user's context. See [AGENT.md](AGENT.md) §3.
 - **AuthZ:** every method maps to a polkit action (`org.enterpriselinux.updates.install` …). Roles from [PERMISSIONS.md](PERMISSIONS.md) decide which actions each user/agent gets. MDM and EDR agents are registered **service principals** with their own scoped role.
 - **Audit:** all writes and all actions audited; reads of sensitive facts (recovery key metadata) audited too. Recovery keys themselves are **never** returned by the API — only escrowed.
