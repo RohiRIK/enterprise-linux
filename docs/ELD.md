@@ -70,6 +70,7 @@ For development without root: `eld --config /dev/null --socket ./api.sock --stat
 
 - **Enforcement.** Every setting reports `"enforced": false` in `/v1/schema`. eld stores, validates, reports and evaluates compliance against them, but does not yet render USBGuard rules, firewall zones, dconf locks, sudoers/polkit rules, or PAM access from them.
 - **JIT grants** change what eld itself allows; they do not yet create sudo rights.
+- **Pending JIT requests** (`roles.request-temporary`) live only in eld's memory for 1 hour. They are dropped when the request expires or eld restarts. This fails closed: a lost request is never granted, and the user simply asks again. Only approved grants are persisted (`state.json`).
 - **Declared but refusing** (`implemented: false`): `device.wipe` (needs MDM-signed confirmation tokens), `encryption.rotate-recovery-key` / `escrow-now` (escrow target not chosen), `updates.rollback` (needs image-based substrate), `network.isolate` / `release-isolation`, `desktop.send-notification`.
 - **Transports and policy formats.** No D-Bus interface yet, so no polkitd delegation (polkit action ids are recorded in the audit log for when it lands). Policy files are JSON only; YAML needs a parser dependency we have not chosen.
 - **Confinement.** No SELinux/AppArmor profile for eld yet; the systemd unit is narrowed but eld still runs as root because the tools it wraps need it.
