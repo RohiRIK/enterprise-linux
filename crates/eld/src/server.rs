@@ -1074,21 +1074,22 @@ mod tests {
 
         // Approving something nobody asked for does nothing.
         let approve = |user: &str, role: &str| json!({"params": {"user": user, "role": role}});
-        assert_eq!(run("roles.approve", approve("carol", "local-admin"), &hd).0, 400);
+        assert_eq!(run("roles.approve", approve("carol", "power-user"), &hd).0, 400);
         assert!(d.store.active_grants(now()).is_empty());
 
-        // A user asks; helpdesk approves; the grant carries the request.
-        let ask = json!({"params": {"role": "local-admin", "for": "30m", "ticket": "INC-1"}});
+        // A user asks; helpdesk approves (a lower role); the grant carries
+        // the request.
+        let ask = json!({"params": {"role": "power-user", "for": "30m", "ticket": "INC-1"}});
         assert_eq!(run("roles.request-temporary", ask.clone(), &alice).0, 200);
-        assert_eq!(run("roles.approve", approve("alice", "local-admin"), &hd).0, 200);
+        assert_eq!(run("roles.approve", approve("alice", "power-user"), &hd).0, 200);
         let gs = d.store.active_grants(now());
         assert_eq!((gs.len(), gs[0].user.as_str(), gs[0].ticket.as_str()), (1, "alice", "INC-1"));
         // The request is consumed.
-        assert_eq!(run("roles.approve", approve("alice", "local-admin"), &hd2).0, 400);
+        assert_eq!(run("roles.approve", approve("alice", "power-user"), &hd2).0, 400);
 
         // Nobody approves their own request.
         assert_eq!(run("roles.request-temporary", ask, &hd2).0, 200);
-        assert_eq!(run("roles.approve", approve("carol", "local-admin"), &hd2).0, 403);
+        assert_eq!(run("roles.approve", approve("carol", "power-user"), &hd2).0, 403);
 
         // Local admins may still grant directly, never to themselves; limits hold.
         assert_eq!(run("roles.grant-temporary", grant("dave", "helpdesk"), &admin).0, 200);
@@ -1097,6 +1098,35 @@ mod tests {
         assert_eq!(run("roles.grant-temporary", long, &admin).0, 400);
         let big = json!({"params": {"role": "helpdesk", "for": "5m", "reason": "x".repeat(300)}});
         assert_eq!(run("roles.request-temporary", big, &alice).0, 400);
+    }
+
+    /// L-12b: two helpdesk users cannot raise each other to local-admin via
+    /// request + approve; a local admin or the MDM agent can approve it.
+    #[test]
+    fn helpdesk_cannot_approve_local_admin() {
+        let d = daemon();
+        let bob = Caller { uid: 1001, ..caller("bob", &[Role::User, Role::Helpdesk], Source::User) };
+        let carol = Caller { uid: 1002, ..caller("carol", &[Role::User, Role::Helpdesk], Source::User) };
+        let admin = Caller { uid: 0, ..caller("root", &[Role::LocalAdmin], Source::LocalAdmin) };
+        let mdm = Caller { uid: 990, ..caller("el-agent", &[Role::SvcMdm], Source::Mdm) };
+        let run = |name: &str, body: Value, c: &Caller| call(&d, req("POST", &format!("/v1/actions/{name}"), body), c);
+        let ask = json!({"params": {"role": "local-admin", "for": "30m", "ticket": "INC-2"}});
+        let approve = |user: &str| json!({"params": {"user": user, "role": "local-admin"}});
+
+        assert_eq!(run("roles.request-temporary", ask.clone(), &bob).0, 200);
+        assert_eq!(run("roles.request-temporary", ask, &carol).0, 200);
+        assert_eq!(run("roles.approve", approve("bob"), &carol).0, 403);
+        assert_eq!(run("roles.approve", approve("carol"), &bob).0, 403);
+        assert!(d.store.active_grants(now()).is_empty());
+        // Helpdesk can still approve the lower helpdesk role.
+        let hd = json!({"params": {"role": "helpdesk", "for": "30m"}});
+        assert_eq!(run("roles.request-temporary", hd, &bob).0, 200);
+        assert_eq!(run("roles.approve", json!({"params": {"user": "bob", "role": "helpdesk"}}), &carol).0, 200);
+        // A local admin, or the MDM agent, can approve local-admin.
+        assert_eq!(run("roles.approve", approve("bob"), &admin).0, 200);
+        assert_eq!(run("roles.approve", approve("carol"), &mdm).0, 200);
+        let gs = d.store.active_grants(now());
+        assert_eq!(gs.iter().filter(|g| g.role == Role::LocalAdmin).count(), 2);
     }
 
     #[test]
