@@ -5,7 +5,22 @@ if [ "$1" = configure ]; then
   for g in eld-helpdesk eld-admins; do
     getent group "$g" >/dev/null || addgroup --system "$g" >/dev/null
   done
-  if ! getent passwd el-agent >/dev/null; then
+  # The MDM agent's account must be a *local system* account: eld pins the
+  # svc:mdm principal to its uid from /etc/passwd and refuses directory
+  # accounts (review finding M3). Never adopt an el-agent that only
+  # resolves through SSSD/authd, or a regular local user.
+  sys_uid_max=$(awk '$1 == "SYS_UID_MAX" { print $2 }' /etc/login.defs 2>/dev/null)
+  sys_uid_max=${sys_uid_max:-999}
+  agent_uid=$(awk -F: '$1 == "el-agent" { print $3 }' /etc/passwd)
+  if [ -n "$agent_uid" ]; then
+    if [ "$agent_uid" -lt 1 ] || [ "$agent_uid" -gt "$sys_uid_max" ]; then
+      echo "el-eld: local account el-agent has uid $agent_uid, not a system uid (1..$sys_uid_max); refusing to use it as the MDM agent account" >&2
+      exit 1
+    fi
+  elif getent passwd el-agent >/dev/null; then
+    echo "el-eld: el-agent resolves from a directory (SSSD/authd), not /etc/passwd; refusing to use it as the MDM agent account. Remove or rename that directory account, then run: dpkg --configure el-eld" >&2
+    exit 1
+  else
     adduser --system --group --no-create-home --home /nonexistent \
       --shell /usr/sbin/nologin el-agent >/dev/null
   fi

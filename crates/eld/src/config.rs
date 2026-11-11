@@ -18,7 +18,9 @@ pub struct Config {
     /// Maps local (or identity-stack provided) group names to roles, for
     /// bootstrap before any policy arrives.
     pub group_roles: BTreeMap<String, Role>,
-    /// MDM/EDR agents, identified by the Unix account they run as.
+    /// MDM/EDR agents. Matched by uid only: a principal named by `user` is
+    /// pinned at startup to the uid of a *local system* account in
+    /// /etc/passwd ([`Config::pin_service_principals`]).
     pub service_principals: Vec<ServicePrincipal>,
     /// Cap on destructive actions per minute across all callers.
     pub destructive_per_minute: u32,
@@ -32,9 +34,11 @@ pub struct Config {
 pub struct ServicePrincipal {
     /// e.g. `intune`
     pub name: String,
-    /// Unix account the agent runs as.
+    /// Local system account the agent runs as (looked up in /etc/passwd,
+    /// never in the directory).
     #[serde(default)]
     pub user: String,
+    /// Pinned uid. Set by the operator, or filled in from `user` at startup.
     #[serde(default)]
     pub uid: Option<u32>,
     /// `svc:mdm` or `svc:edr`.
@@ -93,6 +97,59 @@ impl Config {
     }
 }
 
+impl Config {
+    /// Pins every service principal to a uid (review finding M3).
+    ///
+    /// A principal given by `user` only is resolved against the local
+    /// `/etc/passwd` text in `passwd` and must be a system account
+    /// (1..=`sys_uid_max`). A directory account (SSSD/authd) with the same
+    /// name, or a regular local user, never becomes a service principal.
+    /// If both `user` and `uid` are set they must agree with /etc/passwd.
+    /// Principals that cannot be pinned are dropped; the returned messages
+    /// say why.
+    pub fn pin_service_principals(&mut self, passwd: &str, sys_uid_max: u32) -> Vec<String> {
+        let local = |name: &str| {
+            passwd.lines().find_map(|l| {
+                let f: Vec<&str> = l.split(':').collect();
+                (f.len() > 2 && f[0] == name).then(|| f[2].parse::<u32>().ok()).flatten()
+            })
+        };
+        let mut warnings = vec![];
+        self.service_principals.retain_mut(|sp| {
+            if sp.user.is_empty() {
+                return sp.uid.is_some();
+            }
+            let why = match (local(&sp.user), sp.uid) {
+                (None, _) => format!("{} is not in /etc/passwd (directory accounts are refused)", sp.user),
+                (Some(u), _) if u == 0 || u > sys_uid_max => {
+                    format!("{} has uid {u}, not a system uid (1..={sys_uid_max})", sp.user)
+                }
+                (Some(u), Some(pinned)) if u != pinned => {
+                    format!("{} has uid {u} in /etc/passwd but the config pins uid {pinned}", sp.user)
+                }
+                (Some(u), _) => {
+                    sp.uid = Some(u);
+                    return true;
+                }
+            };
+            warnings.push(format!("service principal {} disabled: {why}", sp.name));
+            false
+        });
+        warnings
+    }
+}
+
+/// `SYS_UID_MAX` from /etc/login.defs text, default 999.
+pub fn sys_uid_max(login_defs: &str) -> u32 {
+    login_defs
+        .lines()
+        .find_map(|l| {
+            let mut w = l.split_whitespace();
+            (w.next() == Some("SYS_UID_MAX")).then(|| w.next().and_then(|v| v.parse().ok())).flatten()
+        })
+        .unwrap_or(999)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +168,36 @@ mod tests {
             serde_json::from_str(r#"{"servicePrincipals": [{"name": "x", "user": "x", "role": "local-admin"}]}"#)
                 .unwrap();
         assert!(c.validate().is_err());
+    }
+
+    /// Sam M3: only a local system account can be the MDM principal.
+    #[test]
+    fn pins_principals_to_local_system_uids() {
+        let sp = |user: &str, uid: Option<u32>| ServicePrincipal {
+            name: format!("p-{user}"),
+            user: user.into(),
+            uid,
+            role: Role::SvcMdm,
+        };
+        let passwd = "root:x:0:0::/root:/bin/sh\nel-agent:x:990:990::/nonexistent:/usr/sbin/nologin\n\
+                      alice:x:1000:1000::/home/alice:/bin/sh\nagent2:x:991:991::/:/sbin/nologin\n";
+        let mut c = Config {
+            service_principals: vec![
+                sp("el-agent", None),
+                sp("dir-agent", None),
+                sp("alice", None),
+                sp("root", None),
+                sp("agent2", Some(500)),
+                sp("", Some(777)),
+            ],
+            ..Config::default()
+        };
+        let w = c.pin_service_principals(passwd, sys_uid_max("SYS_UID_MIN 100\nSYS_UID_MAX   999\n"));
+        let kept: Vec<_> = c.service_principals.iter().map(|p| (p.user.as_str(), p.uid)).collect();
+        assert_eq!(kept, vec![("el-agent", Some(990)), ("", Some(777))]);
+        assert_eq!(w.len(), 4, "{w:?}");
+        assert!(w[0].contains("directory accounts are refused"));
+        assert_eq!(sys_uid_max(""), 999);
     }
 
     #[test]

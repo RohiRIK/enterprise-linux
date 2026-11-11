@@ -158,6 +158,13 @@ impl Daemon {
         config: Config,
         sys: Box<dyn System>,
     ) -> Daemon {
+        let mut config = config;
+        // Pin service principals to local system uids (Sam M3).
+        let read = |p: &str| sys.read_file(p).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        let max = crate::config::sys_uid_max(&read("/etc/login.defs"));
+        for w in config.pin_service_principals(&read("/etc/passwd"), max) {
+            eprintln!("eld: {w}");
+        }
         Daemon {
             reg,
             store,

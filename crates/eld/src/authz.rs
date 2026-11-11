@@ -89,7 +89,8 @@ impl Resolver<'_> {
         };
 
         for sp in &self.config.service_principals {
-            if sp.uid == Some(uid) || (!sp.user.is_empty() && sp.user == c.user) {
+            // By uid only (Sam M3): names can be supplied by the directory.
+            if sp.uid == Some(uid) {
                 c.principal = sp.name.clone();
                 c.roles = vec![sp.role];
                 c.source = if sp.role == Role::SvcMdm { Source::Mdm } else { Source::LocalAdmin };
@@ -217,6 +218,40 @@ mod tests {
         assert!(!allowed(&[Role::SvcEdr], Role::LocalAdmin));
     }
 
+    /// Sam M3: a directory account named like the MDM agent's local account
+    /// does not get the MDM role.
+    #[test]
+    fn directory_el_agent_is_not_mdm() {
+        let root =
+            std::env::temp_dir().join(format!("eld-authz-m3-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::write(root.join("etc/passwd"), "root:x:0:0::/root:/bin/sh\n").unwrap();
+        std::fs::write(root.join("etc/group"), "").unwrap();
+        // el-agent exists only in the directory (SSSD/authd), uid 5000.
+        let h = Host::fake(
+            &root,
+            FakeRunner::new().on("getent passwd 5000", 0, "el-agent:*:5000:5000::/home/el-agent:/bin/bash\n"),
+        );
+        let mut cfg = Config::default();
+        cfg.service_principals.push(ServicePrincipal {
+            name: "mdm-agent".into(),
+            user: "el-agent".into(),
+            uid: None,
+            role: Role::SvcMdm,
+        });
+        let w = cfg.pin_service_principals("root:x:0:0::/root:/bin/sh\n", 999);
+        assert_eq!(w.len(), 1);
+        let store = Store::memory();
+        let r = Resolver { sys: &h, config: &cfg, store: &store, now: 100 };
+        let c = r.resolve(&peer(5000, 5000, &[]));
+        assert_eq!(c.user, "el-agent");
+        assert_eq!(c.roles, vec![Role::User]);
+        assert!(c.principal.is_empty());
+        assert_eq!(c.source, Source::User);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn peer(uid: u32, gid: u32, groups: &[u32]) -> PeerCred {
         PeerCred { uid, gid, pid: 42, groups: groups.to_vec(), label: String::new() }
     }
@@ -290,6 +325,8 @@ mod tests {
             uid: None,
             role: Role::SvcMdm,
         });
+        let passwd = std::fs::read_to_string(root.join("etc/passwd")).unwrap();
+        assert!(cfg.pin_service_principals(&passwd, 999).is_empty());
         let r4 = Resolver { sys: &h, config: &cfg, store: &store, now: 100 };
         let c = r4.resolve(&peer(990, 990, &[]));
         assert_eq!(c.principal, "intune");
