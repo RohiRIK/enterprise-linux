@@ -689,10 +689,64 @@ fn commit_error(e: CommitError) -> Response {
     }
 }
 
-// asm-generic values (x86_64, aarch64, riscv64, ...); libc does not export
-// them for every target.
-const SO_PEERSEC: libc::c_int = 31;
-const SO_PEERGROUPS: libc::c_int = 59;
+// SO_PEERSEC / SO_PEERGROUPS differ per architecture and libc does not
+// export them for every target, so they are spelled out here, verified
+// against torvalds/linux @ 067c5c24cef2 (2026-11-10):
+//   include/uapi/asm-generic/socket.h          31 / 59 (used by every arch
+//     without its own uapi socket.h: x86, arm, arm64, riscv, s390,
+//     loongarch; powerpc's socket.h includes asm-generic for these two)
+//   arch/mips/include/uapi/asm/socket.h        30 / 59
+//   arch/sparc/include/uapi/asm/socket.h       0x001e / 0x003d
+//   arch/alpha/include/uapi/asm/socket.h       30 / 59 (no Rust target)
+//   arch/parisc/include/uapi/asm/socket.h      0x401d / 0x4034 (no Rust target)
+// Any other architecture fails to build rather than guess: a wrong option
+// number might not fail closed.
+#[cfg(any(
+    target_arch = "x86",
+    target_arch = "x86_64",
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "riscv32",
+    target_arch = "riscv64",
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "s390x",
+    target_arch = "loongarch64"
+))]
+mod sockopt {
+    pub const SO_PEERSEC: libc::c_int = 31;
+    pub const SO_PEERGROUPS: libc::c_int = 59;
+}
+#[cfg(any(target_arch = "mips", target_arch = "mips64", target_arch = "mips32r6", target_arch = "mips64r6"))]
+mod sockopt {
+    pub const SO_PEERSEC: libc::c_int = 30;
+    pub const SO_PEERGROUPS: libc::c_int = 59;
+}
+#[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
+mod sockopt {
+    pub const SO_PEERSEC: libc::c_int = 0x001e;
+    pub const SO_PEERGROUPS: libc::c_int = 0x003d;
+}
+#[cfg(not(any(
+    target_arch = "x86",
+    target_arch = "x86_64",
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "riscv32",
+    target_arch = "riscv64",
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "s390x",
+    target_arch = "loongarch64",
+    target_arch = "mips",
+    target_arch = "mips64",
+    target_arch = "mips32r6",
+    target_arch = "mips64r6",
+    target_arch = "sparc",
+    target_arch = "sparc64"
+)))]
+compile_error!("eld: SO_PEERSEC/SO_PEERGROUPS values for this architecture are not verified; add them from arch/<arch>/include/uapi/asm/socket.h");
+use sockopt::{SO_PEERGROUPS, SO_PEERSEC};
 
 /// Peer credentials of a connected Unix socket, as the kernel recorded them
 /// at `connect()`: `SO_PEERCRED` (uid, gid, pid), `SO_PEERGROUPS`
@@ -927,6 +981,21 @@ mod tests {
         assert_eq!(d.conn_class(0), ConnClass::Root);
         assert_eq!(d.conn_class(990), ConnClass::Service);
         assert_eq!(d.conn_class(1000), ConnClass::User);
+    }
+
+    /// L-12a: the per-arch option numbers match the kernel headers.
+    #[test]
+    fn peer_sockopt_numbers_match_kernel_headers() {
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))]
+        assert_eq!((SO_PEERSEC, SO_PEERGROUPS), (31, 59));
+        #[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
+        assert_eq!((SO_PEERSEC, SO_PEERGROUPS), (0x1e, 0x3d));
+        #[cfg(any(target_arch = "mips", target_arch = "mips64"))]
+        assert_eq!((SO_PEERSEC, SO_PEERGROUPS), (30, 59));
+        // On Linux the label read must not be confused with another option:
+        // a socketpair has no peer label without an LSM, or a real one.
+        let (a, _b) = UnixStream::pair().unwrap();
+        assert!(!peer_cred(&a).unwrap().label.contains('\u{fffd}'));
     }
 
     #[test]
