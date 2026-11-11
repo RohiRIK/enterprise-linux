@@ -261,6 +261,10 @@ class StaticLint(unittest.TestCase):
     def test_nftables_check(self):
         r = subprocess.run(["nft", "-c", "-f", os.path.join(ROOTFS, "etc/nftables/el-baseline.nft")],
                            stderr=subprocess.PIPE, universal_newlines=True)
+        if r.returncode != 0 and "cache initialization failed: Operation not permitted" in r.stderr:
+            # nft -c still opens netlink; without CAP_NET_ADMIN (e.g. a CI runner)
+            # it cannot check anything, so skip rather than report a syntax error.
+            self.skipTest("nft -c needs CAP_NET_ADMIN here")
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_firewalld_zone_xml(self):
