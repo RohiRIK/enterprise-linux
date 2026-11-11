@@ -41,6 +41,8 @@ login:
   deny:        [ "entra:group:Offboarding" ]
 ```
 
+> **eld v0:** `entra:group:...` references are accepted in policy but match nothing yet; eld does not map a directory group onto a local group with the same name. Until identity-provider integration lands, use `local:group:<name>` for groups that authd/SSSD surface locally.
+
 ---
 
 ## 3. Enforcement layers

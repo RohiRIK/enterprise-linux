@@ -192,6 +192,9 @@ impl Daemon {
         for w in config.pin_service_principals(&read("/etc/passwd"), max) {
             eprintln!("eld: {w}");
         }
+        for w in crate::authz::unmatched_ref_warnings(&store) {
+            eprintln!("eld: {w}");
+        }
         Daemon {
             reg,
             store,
@@ -442,6 +445,11 @@ impl Daemon {
             match self.store.commit(req.header("If-Match"), &changes, applied) {
                 Ok(e) => etag = e,
                 Err(e) => return commit_error(e),
+            }
+            if changes.iter().any(|c| c.key.starts_with("roles.")) {
+                for w in crate::authz::unmatched_ref_warnings(&self.store) {
+                    eprintln!("eld: {w}");
+                }
             }
             let detail = json!({"results": results, "dryRun": false});
             self.audit.record(Some(caller), "settings.write", target, "ok", crate::provider::obj(detail));

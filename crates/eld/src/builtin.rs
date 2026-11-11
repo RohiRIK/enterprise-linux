@@ -116,7 +116,7 @@ impl Provider for Roles {
     }
 
     fn settings(&self) -> Vec<SettingSpec> {
-        let d = "Directory groups (e.g. entra:group:IT-Linux-Admins) whose members get this role";
+        let d = "Local groups (local:group:X or X) whose members get this role. Directory references (entra:group:X) are accepted but match nothing until identity-provider integration exists";
         vec![
             SettingSpec::new("roles.power-user", SettingType::List, d),
             SettingSpec::new("roles.helpdesk", SettingType::List, d),

@@ -64,6 +64,35 @@ pub struct PeerCred {
     pub label: String,
 }
 
+/// The local group a role-mapping reference names: `local:group:X` or a
+/// bare `X`. Directory references (`entra:group:X`, `entra:user:X`,
+/// `ad:group:X`, ...) return `None`: a directory name must never be matched
+/// against a local group or user of the same name, so until an identity
+/// provider integration exists they match nothing.
+pub fn local_group_ref(r: &str) -> Option<&str> {
+    match r.strip_prefix("local:group:") {
+        Some(name) => Some(name).filter(|n| !n.is_empty() && !n.contains(':')),
+        None => Some(r).filter(|n| !n.is_empty() && !n.contains(':')),
+    }
+}
+
+/// Warnings for role mappings in `store` that can never match (directory
+/// references such as `entra:group:X`).
+pub fn unmatched_ref_warnings(store: &Store) -> Vec<String> {
+    let mut out = vec![];
+    for role in [Role::PowerUser, Role::Helpdesk, Role::LocalAdmin] {
+        let Some(v) = store.get(&format!("roles.{role}")) else { continue };
+        for r in v.value.as_array().into_iter().flatten().filter_map(|x| x.as_str()) {
+            if local_group_ref(r).is_none() {
+                out.push(format!(
+                    "roles.{role}: {r} matches nothing: directory references are not resolved yet (no identity-provider integration) and never match local names"
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// Turns socket peer credentials into a [`Caller`] with roles.
 pub struct Resolver<'a> {
     pub sys: &'a dyn System,
@@ -108,13 +137,14 @@ impl Resolver<'_> {
                 roles.insert(*r);
             }
         }
-        // Policy mappings: roles.<role> lists group references. Directory
-        // groups are expected to surface as local group names through the
-        // identity stack (authd/SSSD), so "entra:group:X" matches group X.
+        // Policy mappings: roles.<role> lists group references. Only local
+        // references match (see local_group_ref); entra:* and other directory
+        // references match nothing until an identity-provider integration
+        // can resolve them by object id.
         for role in [Role::PowerUser, Role::Helpdesk, Role::LocalAdmin] {
             let Some(v) = self.store.get(&format!("roles.{role}")) else { continue };
             for r in v.value.as_array().into_iter().flatten().filter_map(|x| x.as_str()) {
-                let name = r.rsplit(':').next().unwrap_or(r);
+                let Some(name) = local_group_ref(r) else { continue };
                 if groups.iter().any(|g| g == name) {
                     roles.insert(role);
                 }
@@ -218,6 +248,48 @@ mod tests {
         assert!(!allowed(&[Role::SvcEdr], Role::LocalAdmin));
     }
 
+    /// entra:group:X must never be satisfied by a local group named X.
+    #[test]
+    fn entra_refs_never_match_local_names() {
+        let (h, root) = host();
+        let cfg = Config::default();
+        let store = Store::memory();
+        let set = |refs: serde_json::Value| {
+            store
+                .commit(
+                    None,
+                    &[Change {
+                        key: "roles.local-admin".into(),
+                        value: Some(refs),
+                        source: Source::Mdm,
+                        set_by: "t".into(),
+                    }],
+                    None,
+                )
+                .unwrap();
+        };
+        let r = Resolver { sys: &h, config: &cfg, store: &store, now: 100 };
+        // alice is in the local group "it-linux-admins" (gid 2000).
+        let alice = peer(1000, 1000, &[1000, 2000]);
+        for refs in [
+            json!(["entra:group:it-linux-admins"]),
+            json!(["entra:user:alice"]),
+            json!(["ad:group:it-linux-admins"]),
+            json!(["entra:it-linux-admins"]),
+        ] {
+            set(refs.clone());
+            assert_eq!(r.resolve(&alice).roles, vec![Role::User], "{refs}");
+            assert_eq!(unmatched_ref_warnings(&store).len(), 1);
+        }
+        set(json!(["local:group:it-linux-admins"]));
+        assert!(r.resolve(&alice).roles.contains(&Role::LocalAdmin));
+        set(json!(["it-linux-admins"]));
+        assert!(r.resolve(&alice).roles.contains(&Role::LocalAdmin));
+        assert!(unmatched_ref_warnings(&store).is_empty());
+        assert_eq!(local_group_ref("local:group:"), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// Sam M3: a directory account named like the MDM agent's local account
     /// does not get the MDM role.
     #[test]
@@ -292,7 +364,7 @@ mod tests {
                 None,
                 &[Change {
                     key: "roles.local-admin".into(),
-                    value: Some(json!(["entra:group:it-linux-admins"])),
+                    value: Some(json!(["local:group:it-linux-admins"])),
                     source: Source::Mdm,
                     set_by: "t".into(),
                 }],

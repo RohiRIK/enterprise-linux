@@ -76,7 +76,19 @@ impl Config {
         };
         let c: Config = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         c.validate().map_err(|e| format!("{}: {e}", path.display()))?;
+        for w in c.warnings() {
+            eprintln!("eld: {}: {w}", path.display());
+        }
         Ok(c)
+    }
+
+    /// Settings that load but can never take effect.
+    pub fn warnings(&self) -> Vec<String> {
+        self.group_roles
+            .keys()
+            .filter(|g| g.contains(':'))
+            .map(|g| format!("groupRoles: {g} matches nothing; use the plain local group name (directory references such as entra:group:X are not resolved yet)"))
+            .collect()
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -160,6 +172,16 @@ mod tests {
         assert!(c.validate().is_err());
         let c: Config = serde_json::from_str(r#"{"groupRoles": {"it": "local-admin"}}"#).unwrap();
         assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn warns_about_directory_group_roles() {
+        let c: Config =
+            serde_json::from_str(r#"{"groupRoles": {"entra:group:X": "helpdesk", "eld-admins": "local-admin"}}"#)
+                .unwrap();
+        let w = c.warnings();
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("entra:group:X"));
     }
 
     #[test]
