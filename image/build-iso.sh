@@ -54,7 +54,7 @@ done
 die() { echo "build-iso: $*" >&2; exit 1; }
 [ -r "$base_iso" ] || die "--base-iso is required and must be readable"
 [ -f "$repo/catalog/profiles/$profile.yaml" ] || die "unknown profile '$profile' (catalog/profiles/)"
-for tool in xorriso python3 openssl sha256sum; do
+for tool in xorriso python3 openssl sha256sum install; do
   command -v "$tool" >/dev/null || die "$tool not found"
 done
 
@@ -87,7 +87,10 @@ cp "$deb" "$pay/pool/"
 openssl rand -base64 33 | tr -d '\n=' > "$pay/install.key"
 install_key="$(cat "$pay/install.key")"
 if [ -n "$secrets_out" ]; then
-  (umask 077 && printf '%s\n' "$install_key" > "$secrets_out")
+  # Recreate FILE at 0600: `>` alone keeps a pre-existing mode.
+  rm -f "$secrets_out"
+  install -m 600 /dev/null "$secrets_out"
+  printf '%s\n' "$install_key" > "$secrets_out"
 fi
 
 identity=""
