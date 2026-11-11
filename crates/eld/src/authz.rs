@@ -44,6 +44,26 @@ pub fn polkit_action(op: &str, target: &str) -> String {
     }
 }
 
+/// Peer credentials of a connection, captured once right after `accept()`
+/// with `SO_PEERCRED`, `SO_PEERGROUPS` and `SO_PEERSEC`. The kernel records
+/// these at `connect()` time, so they describe the process that connected,
+/// not whatever process holds that pid later.
+///
+/// Authorization uses only these values. eld never reads `/proc/<pid>` to
+/// decide roles: a client can connect, let the connecting process exit and
+/// keep the socket open until another user's process reuses the pid.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PeerCred {
+    pub uid: u32,
+    pub gid: u32,
+    /// For audit records only, never for authorization.
+    pub pid: i32,
+    /// Supplementary group ids at connect time.
+    pub groups: Vec<u32>,
+    /// SELinux/AppArmor label at connect time (empty without an LSM).
+    pub label: String,
+}
+
 /// Turns socket peer credentials into a [`Caller`] with roles.
 pub struct Resolver<'a> {
     pub sys: &'a dyn System,
@@ -53,16 +73,16 @@ pub struct Resolver<'a> {
 }
 
 impl Resolver<'_> {
-    /// Builds the caller for a peer.
-    pub fn resolve(&self, uid: u32, gid: u32, pid: i32) -> Caller {
+    /// Builds the caller for a peer from its accept-time credentials.
+    pub fn resolve(&self, peer: &PeerCred) -> Caller {
+        let (uid, gid) = (peer.uid, peer.gid);
         let user = self.user_name(uid);
-        let label = self.sys.read_trimmed(&format!("/proc/{pid}/attr/current")).unwrap_or_default();
         let mut c = Caller {
             uid,
             gid,
-            pid,
+            pid: peer.pid,
             user,
-            label: label.trim_end_matches('\0').to_string(),
+            label: peer.label.trim_end_matches('\0').to_string(),
             roles: vec![],
             source: Source::User,
             principal: String::new(),
@@ -81,7 +101,7 @@ impl Resolver<'_> {
         if uid == 0 {
             roles.insert(Role::LocalAdmin);
         }
-        let groups = self.group_names(pid, gid);
+        let groups = self.group_names(gid, &peer.groups);
         for g in &groups {
             if let Some(r) = self.config.group_roles.get(g) {
                 roles.insert(*r);
@@ -128,17 +148,11 @@ impl Resolver<'_> {
         }
     }
 
-    /// Names of the caller's primary and supplementary groups, read from
-    /// `/proc/<pid>/status` so they reflect the live process.
-    fn group_names(&self, pid: i32, gid: u32) -> Vec<String> {
+    /// Names of the caller's primary and supplementary groups, from the
+    /// group ids captured at accept (never from `/proc/<pid>`).
+    fn group_names(&self, gid: u32, groups: &[u32]) -> Vec<String> {
         let mut gids = BTreeSet::from([gid.to_string()]);
-        if let Ok(b) = self.sys.read_file(&format!("/proc/{pid}/status")) {
-            for line in String::from_utf8_lossy(&b).lines() {
-                if let Some(rest) = line.strip_prefix("Groups:") {
-                    gids.extend(rest.split_whitespace().map(String::from));
-                }
-            }
-        }
+        gids.extend(groups.iter().map(u32::to_string));
         let table =
             self.sys.read_file("/etc/group").map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let mut out = vec![];
@@ -178,7 +192,6 @@ mod tests {
             std::env::temp_dir().join(format!("eld-authz-{}-{:?}", std::process::id(), std::thread::current().id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("etc")).unwrap();
-        std::fs::create_dir_all(root.join("proc/42")).unwrap();
         std::fs::write(
             root.join("etc/passwd"),
             "root:x:0:0::/root:/bin/sh\nalice:x:1000:1000::/home/alice:/bin/sh\nmdm:x:990:990::/:/sbin/nologin\n",
@@ -186,7 +199,10 @@ mod tests {
         .unwrap();
         std::fs::write(root.join("etc/group"), "alice:x:1000:\nit-linux-admins:x:2000:alice\nhelpdesk:x:2001:\n")
             .unwrap();
+        // What /proc says about pid 42 *now*. Authorization must ignore it.
+        std::fs::create_dir_all(root.join("proc/42/attr")).unwrap();
         std::fs::write(root.join("proc/42/status"), "Name:\tx\nGroups:\t1000 2000\n").unwrap();
+        std::fs::write(root.join("proc/42/attr/current"), "unconfined\n").unwrap();
         (Host::fake(&root, FakeRunner::new()), root)
     }
 
@@ -201,13 +217,37 @@ mod tests {
         assert!(!allowed(&[Role::SvcEdr], Role::LocalAdmin));
     }
 
+    fn peer(uid: u32, gid: u32, groups: &[u32]) -> PeerCred {
+        PeerCred { uid, gid, pid: 42, groups: groups.to_vec(), label: String::new() }
+    }
+
+    /// Sam H1: the pid in SO_PEERCRED may belong to another process by the
+    /// time the request is read. Here /proc/42 claims membership of the admin
+    /// group, but the accept-time credentials do not: no admin role.
+    #[test]
+    fn pid_reuse_does_not_change_roles() {
+        let (h, root) = host();
+        let mut cfg = Config::default();
+        cfg.group_roles.insert("it-linux-admins".into(), Role::LocalAdmin);
+        let store = Store::memory();
+        let r = Resolver { sys: &h, config: &cfg, store: &store, now: 100 };
+        let c = r.resolve(&peer(1000, 1000, &[1000]));
+        assert_eq!(c.roles, vec![Role::User]);
+        assert_eq!(c.pid, 42);
+        assert!(c.label.is_empty(), "label must come from SO_PEERSEC, not /proc");
+        // Groups captured at accept are honoured even when /proc has no entry.
+        let c = r.resolve(&PeerCred { pid: 4242, ..peer(1000, 1000, &[1000, 2000]) });
+        assert!(c.roles.contains(&Role::LocalAdmin));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn resolves_roles_from_groups_policy_and_grants() {
         let (h, root) = host();
         let store = Store::memory();
         let mut cfg = Config::default();
         let r = Resolver { sys: &h, config: &cfg, store: &store, now: 100 };
-        let c = r.resolve(1000, 1000, 42);
+        let c = r.resolve(&peer(1000, 1000, &[1000, 2000]));
         assert_eq!(c.user, "alice");
         assert_eq!(c.roles, vec![Role::User]);
         assert_eq!(c.source, Source::User);
@@ -224,7 +264,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        let c = r.resolve(1000, 1000, 42);
+        let c = r.resolve(&peer(1000, 1000, &[1000, 2000]));
         assert!(c.roles.contains(&Role::LocalAdmin));
         assert_eq!(c.source, Source::LocalAdmin);
 
@@ -240,9 +280,9 @@ mod tests {
             })
             .unwrap();
         let r2 = Resolver { sys: &h, config: &cfg, store: &store2, now: 100 };
-        assert!(r2.resolve(1000, 1000, 42).roles.contains(&Role::Helpdesk));
+        assert!(r2.resolve(&peer(1000, 1000, &[1000, 2000])).roles.contains(&Role::Helpdesk));
         let r3 = Resolver { now: 300, ..r2 };
-        assert!(!r3.resolve(1000, 1000, 42).roles.contains(&Role::Helpdesk));
+        assert!(!r3.resolve(&peer(1000, 1000, &[1000, 2000])).roles.contains(&Role::Helpdesk));
 
         cfg.service_principals.push(ServicePrincipal {
             name: "intune".into(),
@@ -251,7 +291,7 @@ mod tests {
             role: Role::SvcMdm,
         });
         let r4 = Resolver { sys: &h, config: &cfg, store: &store, now: 100 };
-        let c = r4.resolve(990, 990, 42);
+        let c = r4.resolve(&peer(990, 990, &[]));
         assert_eq!(c.principal, "intune");
         assert_eq!(c.roles, vec![Role::SvcMdm]);
         assert_eq!(c.source, Source::Mdm);

@@ -30,7 +30,7 @@ dist/ci/rust.yml           GitHub Actions workflow (fmt, clippy -D warnings, tes
 examples/policy.json       the CONTROL-API §4 policy as JSON (tested to apply cleanly)
 ```
 
-Dependencies are deliberately few: `serde`, `serde_json`, `libc` (for `SO_PEERCRED`). No async runtime, no HTTP framework: one thread per connection, capped at 64.
+Dependencies are deliberately few: `serde`, `serde_json`, `libc` (for `SO_PEERCRED`/`SO_PEERGROUPS`/`SO_PEERSEC`). No async runtime, no HTTP framework: one thread per connection, capped at 64.
 
 ## 2. Build and try it
 
@@ -54,7 +54,7 @@ For development without root: `eld --config /dev/null --socket ./api.sock --stat
 | Area | v0 behaviour |
 |---|---|
 | Transport | REST/JSON over `/run/eld/api.sock`, no TCP listener. Endpoints exactly as CONTROL-API.md §4, plus `PATCH /v1/settings`, `DELETE /v1/settings/{key}`, `GET /v1/whoami`. |
-| AuthN | `SO_PEERCRED` (uid, gid, pid) + SELinux/AppArmor label from `/proc/<pid>/attr/current`. No tokens or passwords. |
+| AuthN | Peer credentials captured once, right after `accept()` and before the request is read: `SO_PEERCRED` (uid, gid, pid), `SO_PEERGROUPS` (supplementary groups) and `SO_PEERSEC` (SELinux/AppArmor label). The kernel records these at `connect()`, so they cannot change while a client holds the socket open. eld never reads `/proc/<pid>` for authorization, because a pid can be reused by another user's process (pid-reuse race, review finding H1); the pid is kept for audit records only. If `SO_PEERGROUPS` is unavailable (Linux < 4.13) the caller gets its primary gid only. No tokens or passwords. |
 | Roles | root = local-admin; others = user, plus roles from `groupRoles` in config, policy keys `roles.<role>` (directory group names as surfaced by authd/SSSD), and unexpired JIT grants. MDM/EDR agents are service principals by Unix account. |
 | AuthZ | Reads: any local user (encryption reads audited). Settings writes: local-admin or svc:mdm. Events: helpdesk+. Each action declares its minimum role. Destructive actions rate-limited. |
 | Precedence | Every stored value remembers its source; `mdm > local-admin > user`. Lower sources are rejected per key and a `settings.conflict` event is raised. A full policy `PUT` removes keys that source no longer sets. |

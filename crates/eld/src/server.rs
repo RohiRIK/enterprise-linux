@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use crate::audit::Auditor;
-use crate::authz::{allowed, Resolver};
+use crate::authz::{allowed, PeerCred, Resolver};
 use crate::config::Config;
 use crate::events::Bus;
 use crate::http::{read_request, write_response, write_sse_head, Request, Response};
@@ -71,9 +71,9 @@ impl Daemon {
         Daemon { reg, store, audit, bus, config, sys, destructive: Mutex::new(VecDeque::new()) }
     }
 
-    /// Resolves peer credentials into a caller.
-    pub fn caller(&self, uid: u32, gid: u32, pid: i32) -> Caller {
-        Resolver { sys: self.sys.as_ref(), config: &self.config, store: &self.store, now: now() }.resolve(uid, gid, pid)
+    /// Resolves accept-time peer credentials into a caller.
+    pub fn caller(&self, peer: &PeerCred) -> Caller {
+        Resolver { sys: self.sys.as_ref(), config: &self.config, store: &self.store, now: now() }.resolve(peer)
     }
 
     /// Publishes an event and writes it to the audit log.
@@ -417,7 +417,10 @@ impl Daemon {
     /// Serves one connection: authenticate, read, route, reply.
     pub fn serve_conn(&self, stream: UnixStream) {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-        let Some((uid, gid, pid)) = peer_cred(&stream) else { return };
+        let Some(peer) = peer_cred(&stream) else { return };
+        // Resolve roles now, from the credentials the kernel recorded at
+        // connect(), before the client sends a single byte (Sam H1).
+        let caller = self.caller(&peer);
         let mut w = match stream.try_clone() {
             Ok(w) => w,
             Err(_) => return,
@@ -429,7 +432,6 @@ impl Daemon {
                 return;
             }
         };
-        let caller = self.caller(uid, gid, pid);
         match self.handle(&req, &caller) {
             Reply::Full(resp) => {
                 let _ = write_response(&mut w, &resp);
@@ -499,22 +501,69 @@ fn commit_error(e: CommitError) -> Response {
     }
 }
 
-/// `SO_PEERCRED` of a connected Unix socket: (uid, gid, pid).
-pub fn peer_cred(s: &UnixStream) -> Option<(u32, u32, i32)> {
+// asm-generic values (x86_64, aarch64, riscv64, ...); libc does not export
+// them for every target.
+const SO_PEERSEC: libc::c_int = 31;
+const SO_PEERGROUPS: libc::c_int = 59;
+
+/// Peer credentials of a connected Unix socket, as the kernel recorded them
+/// at `connect()`: `SO_PEERCRED` (uid, gid, pid), `SO_PEERGROUPS`
+/// (supplementary groups, Linux >= 4.13) and `SO_PEERSEC` (LSM label).
+/// If the groups cannot be read the caller gets its primary gid only, which
+/// fails closed.
+pub fn peer_cred(s: &UnixStream) -> Option<PeerCred> {
     use std::os::fd::AsRawFd;
+    let fd = s.as_raw_fd();
     let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     // SAFETY: cred and len are valid for writes and sized for SO_PEERCRED.
     let rc = unsafe {
-        libc::getsockopt(
-            s.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut cred as *mut libc::ucred).cast(),
-            &mut len,
-        )
+        libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, (&mut cred as *mut libc::ucred).cast(), &mut len)
     };
-    (rc == 0).then_some((cred.uid, cred.gid, cred.pid))
+    if rc != 0 {
+        return None;
+    }
+    Some(PeerCred {
+        uid: cred.uid,
+        gid: cred.gid,
+        pid: cred.pid,
+        groups: peer_groups(fd).unwrap_or_default(),
+        label: peer_label(fd),
+    })
+}
+
+fn peer_groups(fd: std::os::fd::RawFd) -> Option<Vec<u32>> {
+    const GID: usize = std::mem::size_of::<libc::gid_t>();
+    let mut n = 64usize;
+    loop {
+        let mut buf: Vec<libc::gid_t> = vec![0; n];
+        let mut len = (n * GID) as libc::socklen_t;
+        // SAFETY: buf holds n gid_t values and len is its size in bytes.
+        let rc = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, SO_PEERGROUPS, buf.as_mut_ptr().cast(), &mut len) };
+        if rc == 0 {
+            buf.truncate(len as usize / GID);
+            return Some(buf);
+        }
+        // ERANGE: len now holds the size needed (NGROUPS_MAX is 65536).
+        let need = len as usize / GID;
+        if std::io::Error::last_os_error().raw_os_error() == Some(libc::ERANGE) && need > n && need <= 65536 {
+            n = need;
+            continue;
+        }
+        return None;
+    }
+}
+
+fn peer_label(fd: std::os::fd::RawFd) -> String {
+    let mut buf = vec![0u8; 4096];
+    let mut len = buf.len() as libc::socklen_t;
+    // SAFETY: buf is valid for len bytes.
+    let rc = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, SO_PEERSEC, buf.as_mut_ptr().cast(), &mut len) };
+    if rc != 0 {
+        return String::new();
+    }
+    buf.truncate(len as usize);
+    String::from_utf8_lossy(&buf).trim_end_matches(['\0', '\n']).to_string()
 }
 
 #[cfg(test)]
@@ -573,6 +622,26 @@ mod tests {
             "metadata": {"name": "p", "version": "1"},
             "spec": {"updates": {"ring": ring}}
         })
+    }
+
+    /// Sam H1: groups are captured from the socket itself at accept.
+    #[test]
+    fn peer_cred_captures_groups_at_accept() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        let p = peer_cred(&a).unwrap();
+        // SAFETY: plain libc getters with valid buffers.
+        let (uid, gid, mut want) = unsafe {
+            let n = libc::getgroups(0, std::ptr::null_mut());
+            let mut g: Vec<libc::gid_t> = vec![0; n.max(0) as usize];
+            let n = libc::getgroups(n, g.as_mut_ptr());
+            g.truncate(n.max(0) as usize);
+            (libc::getuid(), libc::getgid(), g)
+        };
+        assert_eq!((p.uid, p.gid, p.pid), (uid, gid, std::process::id() as i32));
+        let mut got = p.groups.clone();
+        got.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(got, want);
     }
 
     #[test]
