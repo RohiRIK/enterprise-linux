@@ -43,7 +43,8 @@ elctl settings diff  -f examples/policy.json
 sudo elctl settings apply -f examples/policy.json
 elctl --json facts get compliance
 sudo elctl action run device.reboot --dry-run
-sudo elctl action run roles.grant-temporary --user alice --role local-admin --for 30m --ticket INC-1234
+elctl action run roles.request-temporary --role local-admin --for 30m --ticket INC-1234   # as alice
+elctl action run roles.approve --user alice --role local-admin                       # as helpdesk
 sudo elctl events follow --json
 ```
 
@@ -61,7 +62,7 @@ For development without root: `eld --config /dev/null --socket ./api.sock --stat
 | Policy | `DevicePolicy` JSON, validated per key against the schema, idempotent (second apply = all `unchanged`), dry run via `POST /v1/settings/diff`, optimistic concurrency via `ETag`/`If-Match`. Applied name/version reported as `policy` facts. |
 | Facts | 13 namespaces. Real readers for os-release, DMI, TPM, efivars Secure Boot, SELinux/AppArmor, firewalld/ufw/nftables, sshd, USBGuard, fapolicyd, auditd, apt/dnf/zypper pending updates and reboot state, lsblk + cryptsetup LUKS/TPM2 token detection, Flatpak and package inventory, NetworkManager VPN, authd/SSSD/Himmelblau, logind sessions. Anything unreadable is `"unknown"`, never a guess. |
 | Compliance | Rule engine over the other namespaces' facts (`compliance` facts + `compliance.evaluate`). Required rules set by `compliance.required`. |
-| Actions | Implemented: `device.lock/reboot/collect-logs`, `updates.check/install-now`, `apps.install/remove/repair` (allow-list + self-service policy enforced), `identity.resync` (SSSD), `security.run-compliance-scan` (OpenSCAP), `roles.grant-temporary/revoke`, `audit.export`, `compliance.evaluate`. Every mutating action supports `--dry-run`, which returns the exact native commands. |
+| Actions | Implemented: `device.lock/reboot/collect-logs`, `updates.check/install-now`, `apps.install/remove/repair` (allow-list + self-service policy enforced), `identity.resync` (SSSD), `security.run-compliance-scan` (OpenSCAP), `roles.request-temporary/approve/grant-temporary/revoke` (users request for themselves, helpdesk approves pending requests only, direct grants need local-admin or MDM), `audit.export`, `compliance.evaluate`. Every mutating action supports `--dry-run`, which returns the exact native commands. |
 | Audit | Every write, action, denial and event: who, process, polkit action id, old -> new, outcome. JSON lines (0600) + journald native protocol. |
 | Distro support | Branches on substrate family only (Debian/Ubuntu, RHEL-family, SUSE), never on a distro name. Tested on Ubuntu 24.04; RHEL paths are covered by fixture tests only. |
 

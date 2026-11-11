@@ -63,6 +63,7 @@ Inspired by Windows LAPS / Endpoint Privilege Management and Red Hat IdM sudo ru
 
 1. User clicks **"Request admin"** in the desktop app (or `elctl request admin --reason ... --for 30m`).
 2. Request goes to the approver channel defined in policy: auto-approve for listed groups, helpdesk approval in the MDM/ITSM, or a ticket number.
+   In eld v0 this is `elctl action run roles.request-temporary --role local-admin --for 30m --ticket INC-1234` (any user, for themselves only). Helpdesk approves with `roles.approve --user alice --role local-admin`; nobody can approve their own request. **Helpdesk never grants a role on its own initiative**: a direct `roles.grant-temporary` without a request needs local-admin or the MDM (review finding M2). Pending requests expire after 1 hour and are held in memory.
 3. On approval, `eld` grants the `local-admin` role for N minutes, writes a `roles.granted` event, and **revokes automatically** at expiry or logout.
 4. Optional: **command-scoped elevation** — approve only specific commands (e.g. install one `.deb`/`.rpm` from an allowed source) instead of a full shell.
 5. Optional: session recording (tlog, as in RHEL) for elevated shells.

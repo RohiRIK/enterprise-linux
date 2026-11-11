@@ -844,13 +844,52 @@ mod tests {
         let (st, v) = call(&d, req("POST", "/v1/actions/device.lock", json!({"dryRun": true})), &hd);
         assert_eq!(st, 200);
         assert_eq!(v["status"], "dry-run");
-        // JIT: helpdesk can grant to others, never to itself.
-        let grant = |user: &str| json!({"params": {"user": user, "role": "local-admin", "for": "30m"}});
-        assert_eq!(call(&d, req("POST", "/v1/actions/roles.grant-temporary", grant("bob")), &hd).0, 403);
-        assert_eq!(call(&d, req("POST", "/v1/actions/roles.grant-temporary", grant("alice")), &hd).0, 200);
-        assert_eq!(d.store.active_grants(now()).len(), 1);
+    }
+
+    /// Sam M2: helpdesk never grants roles on its own initiative; it can
+    /// only approve another user's pending request.
+    #[test]
+    fn helpdesk_cannot_grant_only_approve() {
+        let d = daemon();
+        let alice = caller("alice", &[Role::User], Source::User);
+        let hd = Caller { uid: 1001, ..caller("bob", &[Role::User, Role::Helpdesk], Source::User) };
+        let hd2 = Caller { uid: 1002, ..caller("carol", &[Role::User, Role::Helpdesk], Source::User) };
+        let admin = Caller { uid: 0, ..caller("root", &[Role::LocalAdmin], Source::LocalAdmin) };
+        let run = |name: &str, body: Value, c: &Caller| call(&d, req("POST", &format!("/v1/actions/{name}"), body), c);
+        let grant = |user: &str, role: &str| json!({"params": {"user": user, "role": role, "for": "30m"}});
+
+        // Direct grants: refused for helpdesk, for any role and any target.
+        for role in ["local-admin", "helpdesk", "power-user"] {
+            assert_eq!(run("roles.grant-temporary", grant("alice", role), &hd).0, 403);
+            assert_eq!(run("roles.grant-temporary", grant("carol", role), &hd).0, 403);
+        }
+        assert!(d.store.active_grants(now()).is_empty());
+
+        // Approving something nobody asked for does nothing.
+        let approve = |user: &str, role: &str| json!({"params": {"user": user, "role": role}});
+        assert_eq!(run("roles.approve", approve("carol", "local-admin"), &hd).0, 400);
+        assert!(d.store.active_grants(now()).is_empty());
+
+        // A user asks; helpdesk approves; the grant carries the request.
+        let ask = json!({"params": {"role": "local-admin", "for": "30m", "ticket": "INC-1"}});
+        assert_eq!(run("roles.request-temporary", ask.clone(), &alice).0, 200);
+        assert_eq!(run("roles.approve", approve("alice", "local-admin"), &hd).0, 200);
+        let gs = d.store.active_grants(now());
+        assert_eq!((gs.len(), gs[0].user.as_str(), gs[0].ticket.as_str()), (1, "alice", "INC-1"));
+        // The request is consumed.
+        assert_eq!(run("roles.approve", approve("alice", "local-admin"), &hd2).0, 400);
+
+        // Nobody approves their own request.
+        assert_eq!(run("roles.request-temporary", ask, &hd2).0, 200);
+        assert_eq!(run("roles.approve", approve("carol", "local-admin"), &hd2).0, 403);
+
+        // Local admins may still grant directly, never to themselves; limits hold.
+        assert_eq!(run("roles.grant-temporary", grant("dave", "helpdesk"), &admin).0, 200);
+        assert_eq!(run("roles.grant-temporary", grant("root", "helpdesk"), &admin).0, 403);
         let long = json!({"params": {"user": "alice", "role": "local-admin", "for": "48h"}});
-        assert_eq!(call(&d, req("POST", "/v1/actions/roles.grant-temporary", long), &hd).0, 400);
+        assert_eq!(run("roles.grant-temporary", long, &admin).0, 400);
+        let big = json!({"params": {"role": "helpdesk", "for": "5m", "reason": "x".repeat(300)}});
+        assert_eq!(run("roles.request-temporary", big, &alice).0, 400);
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub fn registry(
         security::new(),
         updates::new(),
         Arc::new(builtin::Policy(Arc::clone(&store))),
-        Arc::new(builtin::Roles { store, max_grant_minutes: config.max_grant_minutes }),
+        Arc::new(builtin::Roles::new(store, config.max_grant_minutes)),
         Arc::new(builtin::Audit(audit)),
     ])
 }
