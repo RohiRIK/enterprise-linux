@@ -8,12 +8,16 @@
 #                      [--sha256sums SHA256SUMS] [--profile default]
 #                      [--deb out/el-eld_*.deb] [--out out/] [--timezone Asia/Jerusalem]
 #                      [--unattended] [--test-identity] [--serial]
+#                      [--secrets-out FILE]
 #
 # --unattended   add `autoinstall` to the GRUB entry: installs without asking.
 #                Without it the installer asks before it erases the disk.
 # --test-identity  CI only: local account eltest / random password (printed),
 #                powers off after install and reports on first boot.
 # --serial       kernel console on ttyS0 too (CI logs).
+# --secrets-out FILE  write the install key and test password to FILE (0600,
+#                one per line) instead of printing the password, so CI can
+#                mask them and scrub them from logs before upload.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -27,8 +31,9 @@ timezone="Asia/Jerusalem"
 unattended=0
 test_identity=0
 serial=0
+secrets_out=""
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --base-iso) base_iso="${2:?}"; shift 2 ;;
@@ -40,6 +45,7 @@ while [ $# -gt 0 ]; do
     --unattended) unattended=1; shift ;;
     --test-identity) test_identity=1; shift ;;
     --serial) serial=1; shift ;;
+    --secrets-out) secrets_out="${2:?}"; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "build-iso: unknown argument: $1" >&2; usage 2 ;;
   esac
@@ -80,6 +86,9 @@ cp "$deb" "$pay/pool/"
 # Per-build LUKS install key (see image/README.md "Install key").
 openssl rand -base64 33 | tr -d '\n=' > "$pay/install.key"
 install_key="$(cat "$pay/install.key")"
+if [ -n "$secrets_out" ]; then
+  (umask 077 && printf '%s\n' "$install_key" > "$secrets_out")
+fi
 
 identity=""
 interactive="identity"
@@ -96,7 +105,12 @@ if [ "$test_identity" = 1 ]; then
   interactive=""
   late_args="--ci-report"
   shutdown=poweroff
-  echo "build-iso: test identity eltest / $test_pw" >&2
+  if [ -n "$secrets_out" ]; then
+    printf '%s\n' "$test_pw" >> "$secrets_out"
+    echo "build-iso: test identity eltest (password in $secrets_out)" >&2
+  else
+    echo "build-iso: test identity eltest / $test_pw" >&2
+  fi
 fi
 
 git_rev="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)"

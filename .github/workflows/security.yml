@@ -22,3 +22,10 @@ jobs:
       - name: Python unit tests (security/${{ matrix.suite }})
         working-directory: security/${{ matrix.suite }}
         run: python3 -m unittest discover -s tests -v
+
+  encryption:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Encryption tests (mocked cryptsetup/TPM)
+        run: python3 security/encryption/tests/run-tests.py -v
