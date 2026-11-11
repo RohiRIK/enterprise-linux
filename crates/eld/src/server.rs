@@ -34,12 +34,14 @@ const EVENTS_ROLE: Role = Role::Helpdesk;
 /// lock everyone else, the MDM agent and admins out of the API).
 #[derive(Debug, Clone)]
 pub struct Limits {
-    /// Concurrent connections served in total; more get 503.
+    /// Concurrent connections served in total; more get 503. Root is
+    /// bounded by this alone.
     pub max_connections: usize,
-    /// Of `max_connections`, slots only root and service principals
-    /// (MDM/EDR agents, matched by uid) may use.
+    /// Slots kept back from ordinary users. Service principals (MDM/EDR
+    /// agents, matched by uid) share these and can never hold more, so a
+    /// compromised agent cannot starve root or users.
     pub reserved: usize,
-    /// Concurrent connections per non-privileged uid.
+    /// Concurrent connections per ordinary uid.
     pub per_uid: usize,
     /// Total time from accept to a fully read request (line, headers and
     /// body), not per read, so a client dripping bytes is cut off.
@@ -52,6 +54,17 @@ impl Default for Limits {
     }
 }
 
+/// Who a connection counts against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnClass {
+    /// uid 0: only the total limit applies.
+    Root,
+    /// A service principal's uid: shares the reserved slots.
+    Service,
+    /// Everyone else: the unreserved slots, `per_uid` each.
+    User,
+}
+
 /// Admission control for [`Limits`].
 #[derive(Debug, Default)]
 pub struct Slots {
@@ -61,41 +74,55 @@ pub struct Slots {
 #[derive(Debug, Default)]
 struct SlotState {
     total: usize,
-    unprivileged: usize,
+    service: usize,
+    users: usize,
     per_uid: HashMap<u32, usize>,
 }
 
 impl Slots {
     /// Takes a slot for `uid`, or says why not.
-    pub fn acquire(&self, l: &Limits, uid: u32, privileged: bool) -> Result<(), &'static str> {
+    pub fn acquire(&self, l: &Limits, uid: u32, class: ConnClass) -> Result<(), &'static str> {
         let mut s = self.st.lock().unwrap();
         if s.total >= l.max_connections {
             return Err("too many connections");
         }
-        if !privileged {
-            if s.unprivileged >= l.max_connections.saturating_sub(l.reserved) {
-                return Err("too many connections");
+        match class {
+            ConnClass::Root => {}
+            ConnClass::Service => {
+                if s.service >= l.reserved {
+                    return Err("too many connections from service principals");
+                }
+                s.service += 1;
             }
-            if s.per_uid.get(&uid).copied().unwrap_or(0) >= l.per_uid {
-                return Err("too many connections from this user");
+            ConnClass::User => {
+                if s.users >= l.max_connections.saturating_sub(l.reserved) {
+                    return Err("too many connections");
+                }
+                if s.per_uid.get(&uid).copied().unwrap_or(0) >= l.per_uid {
+                    return Err("too many connections from this user");
+                }
+                s.users += 1;
+                *s.per_uid.entry(uid).or_default() += 1;
             }
-            s.unprivileged += 1;
-            *s.per_uid.entry(uid).or_default() += 1;
         }
         s.total += 1;
         Ok(())
     }
 
     /// Returns a slot taken by [`Slots::acquire`].
-    pub fn release(&self, uid: u32, privileged: bool) {
+    pub fn release(&self, uid: u32, class: ConnClass) {
         let mut s = self.st.lock().unwrap();
         s.total = s.total.saturating_sub(1);
-        if !privileged {
-            s.unprivileged = s.unprivileged.saturating_sub(1);
-            if let Some(n) = s.per_uid.get_mut(&uid) {
-                *n -= 1;
-                if *n == 0 {
-                    s.per_uid.remove(&uid);
+        match class {
+            ConnClass::Root => {}
+            ConnClass::Service => s.service = s.service.saturating_sub(1),
+            ConnClass::User => {
+                s.users = s.users.saturating_sub(1);
+                if let Some(n) = s.per_uid.get_mut(&uid) {
+                    *n -= 1;
+                    if *n == 0 {
+                        s.per_uid.remove(&uid);
+                    }
                 }
             }
         }
@@ -521,9 +548,15 @@ impl Daemon {
         }
     }
 
-    /// Root and service principals (by uid) may use the reserved slots.
-    pub fn privileged(&self, uid: u32) -> bool {
-        uid == 0 || self.config.service_principals.iter().any(|sp| sp.uid == Some(uid))
+    /// Which connection limits apply to `uid`.
+    pub fn conn_class(&self, uid: u32) -> ConnClass {
+        if uid == 0 {
+            ConnClass::Root
+        } else if self.config.service_principals.iter().any(|sp| sp.uid == Some(uid)) {
+            ConnClass::Service
+        } else {
+            ConnClass::User
+        }
     }
 
     /// Serves one connection: authenticate, read, route, reply.
@@ -593,8 +626,8 @@ impl Daemon {
             let Ok(stream) = conn else { continue };
             let until = Instant::now() + self.limits.request_deadline;
             let Some(peer) = peer_cred(&stream) else { continue };
-            let privileged = self.privileged(peer.uid);
-            if let Err(why) = self.slots.acquire(&self.limits, peer.uid, privileged) {
+            let class = self.conn_class(peer.uid);
+            if let Err(why) = self.slots.acquire(&self.limits, peer.uid, class) {
                 let mut s = stream;
                 let _ = s.set_write_timeout(Some(Duration::from_secs(1)));
                 let _ = write_response(&mut s, &Response::error(503, code::INTERNAL, why));
@@ -603,7 +636,7 @@ impl Daemon {
             let d = Arc::clone(&self);
             std::thread::spawn(move || {
                 d.serve_peer(stream, &peer, until);
-                d.slots.release(peer.uid, privileged);
+                d.slots.release(peer.uid, class);
             });
         }
     }
@@ -766,28 +799,51 @@ mod tests {
     /// reserved slots stay open for root and the MDM uid.
     #[test]
     fn one_uid_cannot_starve_others() {
+        use ConnClass::*;
         let l = Limits::default();
         let s = Slots::default();
         for _ in 0..l.per_uid {
-            s.acquire(&l, 1000, false).unwrap();
+            s.acquire(&l, 1000, User).unwrap();
         }
-        assert_eq!(s.acquire(&l, 1000, false), Err("too many connections from this user"));
-        s.acquire(&l, 1001, false).unwrap();
+        assert_eq!(s.acquire(&l, 1000, User), Err("too many connections from this user"));
+        s.acquire(&l, 1001, User).unwrap();
         // Many attacker uids fill every unreserved slot...
         let mut uid = 2000;
-        while s.acquire(&l, uid, false).is_ok() {
+        while s.acquire(&l, uid, User).is_ok() {
             uid += 1;
         }
-        assert_eq!(s.acquire(&l, 5000, false), Err("too many connections"));
+        assert_eq!(s.acquire(&l, 5000, User), Err("too many connections"));
         // ...but root and the MDM agent still get in.
-        s.acquire(&l, 0, true).unwrap();
-        s.acquire(&l, 990, true).unwrap();
-        s.release(1000, false);
-        s.acquire(&l, 1000, false).unwrap();
+        s.acquire(&l, 0, Root).unwrap();
+        s.acquire(&l, 990, Service).unwrap();
+        s.release(1000, User);
+        s.acquire(&l, 1000, User).unwrap();
+    }
+
+    /// Service principals share the reserved slots and cannot exceed them,
+    /// so a compromised agent cannot starve root; root is bounded only by
+    /// the total.
+    #[test]
+    fn service_principals_capped_root_is_not() {
+        use ConnClass::*;
+        let l = Limits::default();
+        let s = Slots::default();
+        for i in 0..l.reserved {
+            s.acquire(&l, 990 + (i as u32 % 2), Service).unwrap();
+        }
+        assert_eq!(s.acquire(&l, 990, Service), Err("too many connections from service principals"));
+        assert_eq!(s.acquire(&l, 991, Service), Err("too many connections from service principals"));
+        // Root fills everything that is left, past any per-uid or reserved cap.
+        for _ in l.reserved..l.max_connections {
+            s.acquire(&l, 0, Root).unwrap();
+        }
+        assert_eq!(s.acquire(&l, 0, Root), Err("too many connections"));
+        s.release(990, Service);
+        s.acquire(&l, 990, Service).unwrap();
     }
 
     #[test]
-    fn service_principal_uids_are_privileged() {
+    fn connection_classes() {
         let mut d = daemon();
         d.config.service_principals.push(crate::config::ServicePrincipal {
             name: "mdm".into(),
@@ -795,7 +851,9 @@ mod tests {
             uid: Some(990),
             role: Role::SvcMdm,
         });
-        assert!(d.privileged(0) && d.privileged(990) && !d.privileged(1000));
+        assert_eq!(d.conn_class(0), ConnClass::Root);
+        assert_eq!(d.conn_class(990), ConnClass::Service);
+        assert_eq!(d.conn_class(1000), ConnClass::User);
     }
 
     #[test]

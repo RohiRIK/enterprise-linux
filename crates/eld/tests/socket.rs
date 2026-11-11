@@ -76,7 +76,7 @@ fn slow_clients_are_cut_off_and_capped_per_uid() {
     // SAFETY: getuid has no preconditions.
     let uid = unsafe { libc::getuid() };
     if uid == 0 {
-        // root is privileged and exempt from the per-uid cap.
+        // root is bounded only by the total.
         d.limits.max_connections = 2;
         d.limits.reserved = 0;
     }
