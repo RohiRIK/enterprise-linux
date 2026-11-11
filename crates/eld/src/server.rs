@@ -5,13 +5,12 @@ use eld_api::{
     code, result, severity, status, ActionRequest, ApplyResponse, Caller, DevicePolicy, Event, Object, Role,
 };
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, VecDeque};
-use std::io::{BufReader, Write};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::io::{BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::audit::Auditor;
 use crate::authz::{allowed, PeerCred, Resolver};
@@ -25,13 +24,102 @@ use crate::sys::System;
 
 /// Namespaces whose fact reads are audited (recovery-key metadata).
 const AUDITED_READS: &[&str] = &["encryption"];
-/// Concurrent connections served; more get 503.
-const MAX_CONNECTIONS: usize = 64;
 
 /// Role needed to write settings.
 const WRITE_ROLE: Role = Role::LocalAdmin;
 /// Role needed to read the event stream.
 const EVENTS_ROLE: Role = Role::Helpdesk;
+
+/// Connection limits (review finding M1: one local user must not be able to
+/// lock everyone else, the MDM agent and admins out of the API).
+#[derive(Debug, Clone)]
+pub struct Limits {
+    /// Concurrent connections served in total; more get 503.
+    pub max_connections: usize,
+    /// Of `max_connections`, slots only root and service principals
+    /// (MDM/EDR agents, matched by uid) may use.
+    pub reserved: usize,
+    /// Concurrent connections per non-privileged uid.
+    pub per_uid: usize,
+    /// Total time from accept to a fully read request (line, headers and
+    /// body), not per read, so a client dripping bytes is cut off.
+    pub request_deadline: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits { max_connections: 64, reserved: 8, per_uid: 8, request_deadline: Duration::from_secs(10) }
+    }
+}
+
+/// Admission control for [`Limits`].
+#[derive(Debug, Default)]
+pub struct Slots {
+    st: Mutex<SlotState>,
+}
+
+#[derive(Debug, Default)]
+struct SlotState {
+    total: usize,
+    unprivileged: usize,
+    per_uid: HashMap<u32, usize>,
+}
+
+impl Slots {
+    /// Takes a slot for `uid`, or says why not.
+    pub fn acquire(&self, l: &Limits, uid: u32, privileged: bool) -> Result<(), &'static str> {
+        let mut s = self.st.lock().unwrap();
+        if s.total >= l.max_connections {
+            return Err("too many connections");
+        }
+        if !privileged {
+            if s.unprivileged >= l.max_connections.saturating_sub(l.reserved) {
+                return Err("too many connections");
+            }
+            if s.per_uid.get(&uid).copied().unwrap_or(0) >= l.per_uid {
+                return Err("too many connections from this user");
+            }
+            s.unprivileged += 1;
+            *s.per_uid.entry(uid).or_default() += 1;
+        }
+        s.total += 1;
+        Ok(())
+    }
+
+    /// Returns a slot taken by [`Slots::acquire`].
+    pub fn release(&self, uid: u32, privileged: bool) {
+        let mut s = self.st.lock().unwrap();
+        s.total = s.total.saturating_sub(1);
+        if !privileged {
+            s.unprivileged = s.unprivileged.saturating_sub(1);
+            if let Some(n) = s.per_uid.get_mut(&uid) {
+                *n -= 1;
+                if *n == 0 {
+                    s.per_uid.remove(&uid);
+                }
+            }
+        }
+    }
+}
+
+/// Reads from the socket until an absolute deadline, re-arming the socket
+/// timeout with the time left before every read.
+struct DeadlineReader<'a> {
+    s: &'a UnixStream,
+    until: Instant,
+}
+
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "request deadline exceeded"));
+        }
+        self.s.set_read_timeout(Some(left))?;
+        let mut s = self.s;
+        s.read(buf)
+    }
+}
 
 /// What a handler produces.
 pub enum Reply {
@@ -48,6 +136,8 @@ pub struct Daemon {
     pub bus: Arc<Bus>,
     pub config: Config,
     pub sys: Box<dyn System>,
+    pub limits: Limits,
+    slots: Slots,
     destructive: Mutex<VecDeque<u64>>,
 }
 
@@ -68,7 +158,17 @@ impl Daemon {
         config: Config,
         sys: Box<dyn System>,
     ) -> Daemon {
-        Daemon { reg, store, audit, bus, config, sys, destructive: Mutex::new(VecDeque::new()) }
+        Daemon {
+            reg,
+            store,
+            audit,
+            bus,
+            config,
+            sys,
+            limits: Limits::default(),
+            slots: Slots::default(),
+            destructive: Mutex::new(VecDeque::new()),
+        }
     }
 
     /// Resolves accept-time peer credentials into a caller.
@@ -414,18 +514,28 @@ impl Daemon {
         }
     }
 
+    /// Root and service principals (by uid) may use the reserved slots.
+    pub fn privileged(&self, uid: u32) -> bool {
+        uid == 0 || self.config.service_principals.iter().any(|sp| sp.uid == Some(uid))
+    }
+
     /// Serves one connection: authenticate, read, route, reply.
     pub fn serve_conn(&self, stream: UnixStream) {
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+        let until = Instant::now() + self.limits.request_deadline;
         let Some(peer) = peer_cred(&stream) else { return };
+        self.serve_peer(stream, &peer, until);
+    }
+
+    fn serve_peer(&self, stream: UnixStream, peer: &PeerCred, until: Instant) {
         // Resolve roles now, from the credentials the kernel recorded at
         // connect(), before the client sends a single byte (Sam H1).
-        let caller = self.caller(&peer);
+        let caller = self.caller(peer);
         let mut w = match stream.try_clone() {
             Ok(w) => w,
             Err(_) => return,
         };
-        let req = match read_request(&mut BufReader::new(stream)) {
+        let _ = w.set_write_timeout(Some(Duration::from_secs(30)));
+        let req = match read_request(&mut BufReader::new(DeadlineReader { s: &stream, until })) {
             Ok(r) => r,
             Err(resp) => {
                 let _ = write_response(&mut w, &resp);
@@ -437,7 +547,6 @@ impl Daemon {
                 let _ = write_response(&mut w, &resp);
             }
             Reply::Stream(backlog, rx) => {
-                let _ = w.set_write_timeout(Some(Duration::from_secs(30)));
                 if write_sse_head(&mut w).is_err() {
                     return;
                 }
@@ -470,22 +579,24 @@ impl Daemon {
         }
     }
 
-    /// Accept loop: one thread per connection, bounded.
+    /// Accept loop: one thread per connection, bounded in total and per
+    /// uid, with slots reserved for root and service principals.
     pub fn serve(self: Arc<Self>, listener: UnixListener) {
-        let active = Arc::new(AtomicUsize::new(0));
         for conn in listener.incoming() {
             let Ok(stream) = conn else { continue };
-            if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
-                active.fetch_sub(1, Ordering::SeqCst);
+            let until = Instant::now() + self.limits.request_deadline;
+            let Some(peer) = peer_cred(&stream) else { continue };
+            let privileged = self.privileged(peer.uid);
+            if let Err(why) = self.slots.acquire(&self.limits, peer.uid, privileged) {
                 let mut s = stream;
-                let _ = write_response(&mut s, &Response::error(503, code::INTERNAL, "too many connections"));
+                let _ = s.set_write_timeout(Some(Duration::from_secs(1)));
+                let _ = write_response(&mut s, &Response::error(503, code::INTERNAL, why));
                 continue;
             }
             let d = Arc::clone(&self);
-            let a = Arc::clone(&active);
             std::thread::spawn(move || {
-                d.serve_conn(stream);
-                a.fetch_sub(1, Ordering::SeqCst);
+                d.serve_peer(stream, &peer, until);
+                d.slots.release(peer.uid, privileged);
             });
         }
     }
@@ -642,6 +753,42 @@ mod tests {
         got.sort_unstable();
         want.sort_unstable();
         assert_eq!(got, want);
+    }
+
+    /// Sam M1: one uid's connections cannot starve another uid, and the
+    /// reserved slots stay open for root and the MDM uid.
+    #[test]
+    fn one_uid_cannot_starve_others() {
+        let l = Limits::default();
+        let s = Slots::default();
+        for _ in 0..l.per_uid {
+            s.acquire(&l, 1000, false).unwrap();
+        }
+        assert_eq!(s.acquire(&l, 1000, false), Err("too many connections from this user"));
+        s.acquire(&l, 1001, false).unwrap();
+        // Many attacker uids fill every unreserved slot...
+        let mut uid = 2000;
+        while s.acquire(&l, uid, false).is_ok() {
+            uid += 1;
+        }
+        assert_eq!(s.acquire(&l, 5000, false), Err("too many connections"));
+        // ...but root and the MDM agent still get in.
+        s.acquire(&l, 0, true).unwrap();
+        s.acquire(&l, 990, true).unwrap();
+        s.release(1000, false);
+        s.acquire(&l, 1000, false).unwrap();
+    }
+
+    #[test]
+    fn service_principal_uids_are_privileged() {
+        let mut d = daemon();
+        d.config.service_principals.push(crate::config::ServicePrincipal {
+            name: "mdm".into(),
+            user: String::new(),
+            uid: Some(990),
+            role: Role::SvcMdm,
+        });
+        assert!(d.privileged(0) && d.privileged(990) && !d.privileged(1000));
     }
 
     #[test]
