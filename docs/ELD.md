@@ -50,6 +50,16 @@ sudo elctl events follow --json
 
 For development without root: `eld --config /dev/null --socket ./api.sock --state-dir ./state --audit-log ./audit.jsonl --no-journald` and `elctl --socket ./api.sock ...` (or `ELD_SOCKET=./api.sock`).
 
+### Deployment requirement: directory uid ranges
+
+eld identifies the MDM/EDR agents by uid, pinned to local system accounts in `/etc/passwd` (uid 1..`SYS_UID_MAX`, normally 999). A directory account mapped onto the *same* uid as a pinned system account cannot be told apart from it by uid. So the identity stack must never hand out uids in the system range:
+
+- **SSSD:** set `min_id = 1000` (or higher, above `SYS_UID_MAX`) in every `[domain/...]` section; with ID mapping, make sure `ldap_idmap_range_min` is at or above that as well.
+- **authd:** configure its uid/gid allocation range to start at 1000 or above (never below `SYS_UID_MAX`).
+- **Himmelblau / other providers:** same rule: the lowest directory uid must be greater than `SYS_UID_MAX`.
+
+The image and hardening baselines should enforce this; eld itself cannot detect the overlap.
+
 ## 3. What works
 
 | Area | v0 behaviour |
