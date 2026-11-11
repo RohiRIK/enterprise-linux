@@ -9,12 +9,28 @@ if [ "$1" = configure ]; then
   # svc:mdm principal to its uid from /etc/passwd and refuses directory
   # accounts (review finding M3). Never adopt an el-agent that only
   # resolves through SSSD/authd, or a regular local user.
-  sys_uid_max=$(awk '$1 == "SYS_UID_MAX" { print $2 }' /etc/login.defs 2>/dev/null)
-  sys_uid_max=${sys_uid_max:-999}
-  agent_uid=$(awk -F: '$1 == "el-agent" { print $3 }' /etc/passwd)
-  if [ -n "$agent_uid" ]; then
+  sys_uid_max=$(awk '$1 == "SYS_UID_MAX" { print $2; exit }' /etc/login.defs 2>/dev/null)
+  case $sys_uid_max in ''|*[!0-9]*) sys_uid_max=999 ;; esac
+  # Parse /etc/passwd itself; "#el-agent" or "+el-agent" never equal
+  # "el-agent" in field 1, so comments and NIS lines do not count.
+  agent_lines=$(awk -F: '$1 == "el-agent"' /etc/passwd | wc -l)
+  if [ "$agent_lines" -gt 1 ]; then
+    echo "el-eld: el-agent appears $agent_lines times in /etc/passwd (ambiguous); refusing to use it as the MDM agent account" >&2
+    exit 1
+  elif [ "$agent_lines" -eq 1 ]; then
+    agent_uid=$(awk -F: '$1 == "el-agent" { print $3 }' /etc/passwd)
+    case $agent_uid in
+      ''|*[!0-9]*)
+        echo "el-eld: el-agent has a non-numeric uid in /etc/passwd; refusing to use it as the MDM agent account" >&2
+        exit 1 ;;
+    esac
     if [ "$agent_uid" -lt 1 ] || [ "$agent_uid" -gt "$sys_uid_max" ]; then
       echo "el-eld: local account el-agent has uid $agent_uid, not a system uid (1..$sys_uid_max); refusing to use it as the MDM agent account" >&2
+      exit 1
+    fi
+    uid_lines=$(awk -F: -v u="$agent_uid" '$1 !~ /^[#+-]/ && $1 != "" && $3 == u' /etc/passwd | wc -l)
+    if [ "$uid_lines" -ne 1 ]; then
+      echo "el-eld: uid $agent_uid of el-agent is shared with another /etc/passwd entry (ambiguous); refusing to use it as the MDM agent account" >&2
       exit 1
     fi
   elif getent passwd el-agent >/dev/null; then
