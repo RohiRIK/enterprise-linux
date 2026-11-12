@@ -82,11 +82,11 @@ menuentry "Ubuntu (safe graphics)" {
 
 
 class PatchGrub(unittest.TestCase):
-    def run_patch(self, cfg, extra):
+    def run_patch(self, cfg, extra, *opts):
         with tempfile.NamedTemporaryFile("w", suffix=".cfg", delete=False) as f:
             f.write(cfg)
         try:
-            r = subprocess.run([sys.executable, os.path.join(IMAGE, "patch-grub.py"), f.name, extra],
+            r = subprocess.run([sys.executable, os.path.join(IMAGE, "patch-grub.py"), f.name, extra, *opts],
                                capture_output=True, text=True)
             return r, open(f.name).read()
         finally:
@@ -105,6 +105,24 @@ class PatchGrub(unittest.TestCase):
         r, out = self.run_patch(GRUB, "")
         self.assertEqual(r.returncode, 0)
         self.assertIn("/casper/vmlinuz  --- quiet splash", out)
+
+    def test_verbose_drops_quiet_splash(self):
+        r, out = self.run_patch(GRUB, "autoinstall", "--verbose")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for line in out.splitlines():
+            if line.strip().startswith("linux"):
+                self.assertNotIn("quiet", line.split())
+                self.assertNotIn("splash", line.split())
+        self.assertIn("patch-grub: linux", r.stdout)
+
+    def test_require_present(self):
+        r, _ = self.run_patch(GRUB, "autoinstall", "--require", "autoinstall")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_require_missing_fails(self):
+        r, _ = self.run_patch(GRUB, "", "--require", "autoinstall")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("lacks 'autoinstall'", r.stderr)
 
     def test_no_casper(self):
         r, _ = self.run_patch("set timeout=1\n", "autoinstall")
