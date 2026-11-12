@@ -108,13 +108,15 @@ while kill -0 "$qemu_pid" 2>/dev/null; do
   size=$(stat -c %s "$work/install.log")
   [ "$size" != "$last_size" ] && { last_size=$size; last_change=$now; }
   if [ -z "$started" ]; then
-    if grep -q curtin "$work/install.log" || [ "$(du -k "$work/disk.qcow2" | cut -f1)" -ge 65536 ]; then
+    if grep -q 'curtin command' "$work/install.log" || [ "$(du -k "$work/disk.qcow2" | cut -f1)" -ge 65536 ]; then
       started=1; echo "vm-test: install started after $(( (now - start) / 60 )) min"
     elif [ $((now - start)) -ge $((start_min * 60)) ]; then
       fail_install "autoinstall did not start: no curtin output or disk writes after $start_min min"
     fi
   fi
-  if grep -qE 'subiquity/Error|ErrorReporter|Something went wrong' "$work/install.log"; then
+  # A real crash writes a report (`subiquity/ErrorReporter/<id>/add_info`);
+  # `subiquity/Error/load_autoinstall_data` is only that controller loading.
+  if grep -qE 'subiquity/ErrorReporter/[^ ]+/add_info' "$work/install.log"; then
     fail_install "installer crashed (subiquity error report)"
   fi
   [ $((now - last_change)) -ge $((quiet_min * 60)) ] && fail_install "install.log silent for $quiet_min min"
