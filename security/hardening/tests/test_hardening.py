@@ -259,8 +259,15 @@ class StaticLint(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("nft"), "nft not installed")
     def test_nftables_check(self):
-        r = subprocess.run(["nft", "-c", "-f", os.path.join(ROOTFS, "etc/nftables/el-baseline.nft")],
-                           stderr=subprocess.PIPE, universal_newlines=True)
+        cmd = ["nft", "-c", "-f", os.path.join(ROOTFS, "etc/nftables/el-baseline.nft")]
+        if os.geteuid() != 0:
+            # nft -c still opens netlink and needs CAP_NET_ADMIN.
+            if shutil.which("sudo") is None or subprocess.run(
+                    ["sudo", "-n", "true"], stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL).returncode != 0:
+                self.skipTest("nft -c needs CAP_NET_ADMIN")
+            cmd = ["sudo", "-n"] + cmd
+        r = subprocess.run(cmd, stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_firewalld_zone_xml(self):

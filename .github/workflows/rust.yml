@@ -1,5 +1,3 @@
-# Copy to .github/workflows/rust.yml to enable CI (the automation that opened
-# this PR may not push workflow files).
 name: rust
 
 on:

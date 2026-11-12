@@ -8,12 +8,17 @@
 #                      [--sha256sums SHA256SUMS] [--profile default]
 #                      [--deb out/el-eld_*.deb] [--out out/] [--timezone Asia/Jerusalem]
 #                      [--unattended] [--test-identity] [--serial]
+#                      [--secrets-out FILE]
 #
 # --unattended   add `autoinstall` to the GRUB entry: installs without asking.
 #                Without it the installer asks before it erases the disk.
 # --test-identity  CI only: local account eltest / random password (printed),
 #                powers off after install and reports on first boot.
-# --serial       kernel console on ttyS0 too (CI logs).
+# --serial       kernel console and journal on ttyS0, no quiet/splash (CI logs).
+# --secrets-out FILE  write the install key, test password and its crypt hash
+#                to FILE (0600, one per line, plus their JSON-escaped and
+#                base64 forms) instead of printing the password, so CI can
+#                mask them and scrub them from logs before upload.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -27,8 +32,9 @@ timezone="Asia/Jerusalem"
 unattended=0
 test_identity=0
 serial=0
+secrets_out=""
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --base-iso) base_iso="${2:?}"; shift 2 ;;
@@ -40,6 +46,7 @@ while [ $# -gt 0 ]; do
     --unattended) unattended=1; shift ;;
     --test-identity) test_identity=1; shift ;;
     --serial) serial=1; shift ;;
+    --secrets-out) secrets_out="${2:?}"; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "build-iso: unknown argument: $1" >&2; usage 2 ;;
   esac
@@ -48,7 +55,7 @@ done
 die() { echo "build-iso: $*" >&2; exit 1; }
 [ -r "$base_iso" ] || die "--base-iso is required and must be readable"
 [ -f "$repo/catalog/profiles/$profile.yaml" ] || die "unknown profile '$profile' (catalog/profiles/)"
-for tool in xorriso python3 openssl sha256sum; do
+for tool in xorriso python3 openssl sha256sum install; do
   command -v "$tool" >/dev/null || die "$tool not found"
 done
 
@@ -80,6 +87,12 @@ cp "$deb" "$pay/pool/"
 # Per-build LUKS install key (see image/README.md "Install key").
 openssl rand -base64 33 | tr -d '\n=' > "$pay/install.key"
 install_key="$(cat "$pay/install.key")"
+if [ -n "$secrets_out" ]; then
+  # Recreate FILE at 0600: `>` alone keeps a pre-existing mode.
+  rm -f "$secrets_out"
+  install -m 600 /dev/null "$secrets_out"
+  printf '%s\n' "$install_key" > "$secrets_out"
+fi
 
 identity=""
 interactive="identity"
@@ -96,7 +109,12 @@ if [ "$test_identity" = 1 ]; then
   interactive=""
   late_args="--ci-report"
   shutdown=poweroff
-  echo "build-iso: test identity eltest / $test_pw" >&2
+  if [ -n "$secrets_out" ]; then
+    printf '%s\n' "$test_pw" "$hash" >> "$secrets_out"
+    echo "build-iso: test identity eltest (password in $secrets_out)" >&2
+  else
+    echo "build-iso: test identity eltest / $test_pw" >&2
+  fi
 fi
 
 git_rev="$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -110,17 +128,44 @@ json.dump({"schema": "el.image.build/v1", "version": "$version", "git": "$git_re
           open(sys.argv[1], "w"), indent=2)
 PY
 
+# Installer logs can carry the secrets JSON-escaped or base64-encoded; list
+# those forms too so CI masks, scrubs and greps for all of them.
+if [ -n "$secrets_out" ]; then
+  python3 - "$secrets_out" <<'PY'
+import base64, json, sys
+path = sys.argv[1]
+base = [l.rstrip("\n") for l in open(path) if l.strip()]
+forms = []
+for s in base:
+    for f in (s, json.dumps(s)[1:-1], s.replace("/", "\\/"), base64.b64encode(s.encode()).decode()):
+        if f and f not in forms:
+            forms.append(f)
+open(path, "w").write("".join(f + "\n" for f in forms))
+PY
+fi
+
 python3 "$here/render-autoinstall.py" "$here/autoinstall/autoinstall.yaml.in" "$work/autoinstall.yaml" \
   INTERACTIVE="$interactive" TIMEZONE="$timezone" INSTALL_KEY="$install_key" \
   PROFILE="$profile" IDENTITY="$identity" LATE_ARGS="$late_args" SHUTDOWN="$shutdown"
 
-xorriso -osirrox on -indev "$base_iso" -extract /boot/grub/grub.cfg "$work/grub.cfg" >/dev/null 2>&1 \
-  || die "no /boot/grub/grub.cfg on the base ISO"
-chmod u+w "$work/grub.cfg"
 extra=""
 [ "$unattended" = 1 ] && extra="$extra autoinstall"
-[ "$serial" = 1 ] && extra="$extra console=tty0 console=ttyS0,115200"
-python3 "$here/patch-grub.py" "$work/grub.cfg" "$extra"
+[ "$serial" = 1 ] && extra="$extra console=tty0 console=ttyS0,115200 systemd.journald.forward_to_console=1"
+grub_opts=()
+[ "$serial" = 1 ] && grub_opts+=(--verbose)
+[ "$unattended" = 1 ] && grub_opts+=(--require autoinstall)
+# Patch every GRUB config the ISO boots from (UEFI grub.cfg, and loopback.cfg
+# when present), so no boot path skips our arguments.
+grub_maps=()
+for cfg in grub.cfg loopback.cfg; do
+  if xorriso -osirrox on -indev "$base_iso" -extract "/boot/grub/$cfg" "$work/$cfg" >/dev/null 2>&1; then
+    chmod u+w "$work/$cfg"
+    python3 "$here/patch-grub.py" "$work/$cfg" "$extra" "${grub_opts[@]}" >&2
+    grub_maps+=(-map "$work/$cfg" "/boot/grub/$cfg")
+  elif [ "$cfg" = grub.cfg ]; then
+    die "no /boot/grub/grub.cfg on the base ISO"
+  fi
+done
 
 mkdir -p "$out"
 iso="$out/enterprise-linux-$version-$profile-amd64$( [ "$test_identity" = 1 ] && echo -ci ).iso"
@@ -128,7 +173,7 @@ rm -f "$iso"
 xorriso -indev "$base_iso" -outdev "$iso" \
   -map "$pay" /el \
   -map "$work/autoinstall.yaml" /autoinstall.yaml \
-  -map "$work/grub.cfg" /boot/grub/grub.cfg \
+  "${grub_maps[@]}" \
   -boot_image any replay >/dev/null 2>"$work/xorriso.log" \
   || { cat "$work/xorriso.log" >&2; die "xorriso failed"; }
 (cd "$out" && sha256sum "$(basename "$iso")" > "$(basename "$iso").sha256")

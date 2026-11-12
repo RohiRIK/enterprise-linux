@@ -1,5 +1,3 @@
-# Copy to .github/workflows/desktop.yml to enable. (The automation that wrote
-# this cannot push workflow files, so it lives here until a maintainer moves it.)
 name: desktop
 
 on:

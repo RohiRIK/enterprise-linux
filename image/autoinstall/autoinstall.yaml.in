@@ -10,6 +10,8 @@ autoinstall:
   locale: en_US.UTF-8
   keyboard:
     layout: "us,il"
+    # subiquity needs one variant per layout ("" each), or it crashes.
+    variant: ","
     toggle: alt_shift_toggle
   timezone: "@TIMEZONE@"
   source:

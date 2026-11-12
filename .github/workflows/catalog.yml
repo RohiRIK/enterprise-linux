@@ -1,5 +1,3 @@
-# To enable: move this file to .github/workflows/catalog.yml (the push token
-# used to open this PR has no `workflow` scope, so it could not add it there).
 name: catalog
 
 on:

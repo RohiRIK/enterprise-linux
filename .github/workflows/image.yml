@@ -1,6 +1,3 @@
-# Copy to .github/workflows/image.yml to enable CI (the automation that opened
-# this PR may not push workflow files).
-#
 # Builds the enterprise-linux installer ISO from the official Ubuntu 26.04
 # desktop ISO, installs it unattended into a VM with Secure Boot (Microsoft
 # keys, like a real laptop) and a software TPM, boots the installed disk and
@@ -20,6 +17,8 @@ permissions:
 env:
   UBUNTU_ISO: ubuntu-26.04.1-desktop-amd64.iso
   UBUNTU_URL: https://releases.ubuntu.com/26.04
+  # Ubuntu CD Image Automatic Signing Key (2012), signs SHA256SUMS.
+  UBUNTU_CD_KEY: 843938DF228D22F7B3742BC0D94AA3F0EFE21092
 
 jobs:
   unit:
@@ -56,19 +55,61 @@ jobs:
       - name: Download base ISO
         if: steps.iso.outputs.cache-hit != 'true'
         run: mkdir -p iso && curl -fsSL -o "iso/$UBUNTU_ISO" "$UBUNTU_URL/$UBUNTU_ISO"
-      - name: Verify base ISO
-        run: curl -fsSL -o iso/SHA256SUMS "$UBUNTU_URL/SHA256SUMS" && (cd iso && sha256sum -c --ignore-missing SHA256SUMS)
+      - name: Verify base ISO (signed SHA256SUMS)
+        run: |
+          curl -fsSL -o iso/SHA256SUMS "$UBUNTU_URL/SHA256SUMS"
+          curl -fsSL -o iso/SHA256SUMS.gpg "$UBUNTU_URL/SHA256SUMS.gpg"
+          export GNUPGHOME="$RUNNER_TEMP/gnupg" && mkdir -m 700 -p "$GNUPGHOME"
+          gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys "$UBUNTU_CD_KEY"
+          gpg --batch --status-fd 1 --verify iso/SHA256SUMS.gpg iso/SHA256SUMS \
+            | grep -q "^\[GNUPG:\] VALIDSIG $UBUNTU_CD_KEY "
+          (cd iso && sha256sum -c --ignore-missing SHA256SUMS)
       - name: Build eld package
         run: packaging/deb/build-eld-deb.sh --out out
       - name: Build test ISO
         run: |
           image/build-iso.sh --base-iso "iso/$UBUNTU_ISO" --sha256sums iso/SHA256SUMS \
-            --deb out/el-eld_*.deb --out out --unattended --test-identity --serial
+            --deb out/el-eld_*.deb --out out --unattended --test-identity --serial \
+            --secrets-out "$RUNNER_TEMP/el-secrets"
+      - name: Mask build secrets
+        run: while IFS= read -r s; do [ -n "$s" ] && echo "::add-mask::$s"; done < "$RUNNER_TEMP/el-secrets"
       - name: Install and boot in a VM
         run: image/tests/vm-test.sh --iso out/enterprise-linux-*-ci.iso --work vm
-      - name: Logs
+      - name: Scrub secrets from logs
+        id: scrub
         if: always()
+        run: |
+          [ -r "$RUNNER_TEMP/el-secrets" ] || exit 0
+          shopt -s nullglob
+          python3 - "$RUNNER_TEMP/el-secrets" vm/*.log <<'PY'
+          import sys
+          secrets = [l.strip() for l in open(sys.argv[1]) if l.strip()]
+          for path in sys.argv[2:]:
+              data = open(path, "rb").read()
+              for s in secrets:
+                  data = data.replace(s.encode(), b"[REDACTED]")
+              open(path, "wb").write(data)
+          PY
+          # Check only what gets uploaded, never disk.qcow2, TPM or OVMF state.
+          files=(vm/*.log)
+          [ -f vm/screen.ppm ] && files+=(vm/screen.ppm)
+          [ ${#files[@]} -eq 0 ] && exit 0
+          # grep exits 1 for no match; 0 (a secret) and 2 (an error) both fail.
+          rc=0; grep -qaF -f "$RUNNER_TEMP/el-secrets" -- "${files[@]}" || rc=$?
+          [ "$rc" -eq 1 ] || { echo "secret check failed (grep rc=$rc), not uploading" >&2; exit 1; }
+      - name: Logs
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: vm-logs
           path: vm/*.log
+      # An image the text scrub cannot redact: CI-only secrets, fresh per run,
+      # kept for one day.
+      - name: Screenshot
+        if: always() && steps.scrub.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-screen
+          path: vm/screen.ppm
+          retention-days: 1
+          if-no-files-found: ignore

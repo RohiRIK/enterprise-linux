@@ -8,6 +8,6 @@ repo payload ──────────────┼─> image/build-iso.s
 official 26.04 ISO ────────┘        (verified against Ubuntu SHA256SUMS)
 ```
 
-CI ([`dist/ci/image.yml`](../dist/ci/image.yml)) builds a test ISO on pull requests and tags, installs it into a Secure Boot + TPM VM, and checks the first boot. Workflow files sit in `dist/ci/` and `ci/` because the automation token cannot push to `.github/workflows/`; copy them there to turn CI on.
+CI ([`.github/workflows/image.yml`](../.github/workflows/image.yml)) builds a test ISO on pull requests and tags, installs it into a Secure Boot + TPM VM, and checks the first boot.
 
 Not done yet: signing the ISO checksums and UKIs (needs the key decision in KERNEL.md "Signing"), publishing to Releases, the `el-kernel-uki` package, reproducible build ids beyond the git revision in `BUILD.json`.
