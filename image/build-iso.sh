@@ -14,7 +14,7 @@
 #                Without it the installer asks before it erases the disk.
 # --test-identity  CI only: local account eltest / random password (printed),
 #                powers off after install and reports on first boot.
-# --serial       kernel console and journal on ttyS0 too (CI logs).
+# --serial       kernel console on ttyS0 too (CI logs).
 # --secrets-out FILE  write the install key and test password to FILE (0600,
 #                one per line) instead of printing the password, so CI can
 #                mask them and scrub them from logs before upload.
@@ -136,7 +136,7 @@ xorriso -osirrox on -indev "$base_iso" -extract /boot/grub/grub.cfg "$work/grub.
 chmod u+w "$work/grub.cfg"
 extra=""
 [ "$unattended" = 1 ] && extra="$extra autoinstall"
-[ "$serial" = 1 ] && extra="$extra console=tty0 console=ttyS0,115200 systemd.journald.forward_to_console=1"
+[ "$serial" = 1 ] && extra="$extra console=tty0 console=ttyS0,115200"
 python3 "$here/patch-grub.py" "$work/grub.cfg" "$extra"
 
 mkdir -p "$out"

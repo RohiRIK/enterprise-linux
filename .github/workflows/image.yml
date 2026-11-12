@@ -95,7 +95,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vm-logs
-          path: |
-            vm/*.log
-            vm/install-screen.ppm
-          if-no-files-found: warn
+          path: vm/*.log

@@ -52,33 +52,9 @@ qemu_args=(-machine "q35,smm=on,accel=$accel" -cpu max -smp 4 -m 8192
   -netdev "user,id=net0" -device "virtio-net-pci,netdev=net0"
   -vga virtio -display none -no-reboot)
 
-# Record the live kernel command line the ISO will boot, so a run that lands
-# in the live session instead of the installer shows whether `autoinstall`
-# was there.
-if command -v xorriso >/dev/null; then
-  xorriso -osirrox on -indev "$iso" -extract /boot/grub/grub.cfg "$work/iso-grub.cfg" >/dev/null 2>&1 \
-    && grep -nE '^\s*(menuentry|linux)\s' "$work/iso-grub.cfg" > "$work/grub.log" || true
-fi
-
-# Screenshot the guest every five minutes through the QEMU monitor: with
-# -display none this is the only view of a GUI installer that stalls.
-screens() {
-  while sleep 300; do
-    python3 -c '
-import socket, sys, time
-s = socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect(sys.argv[1])
-s.sendall(("screendump " + sys.argv[2] + "\n").encode()); time.sleep(2); s.close()
-' "$work/mon.sock" "$work/install-screen.ppm" || true
-  done
-}
-
 echo "vm-test: installing ($accel, up to $install_min min)"
-screens & screens_pid=$!
-trap 'kill "$screens_pid" 2>/dev/null || true; kill "$(cat "$work/swtpm.pid" 2>/dev/null)" 2>/dev/null || true' EXIT
 timeout "$((install_min * 60))" qemu-system-x86_64 "${qemu_args[@]}" -cdrom "$iso" -boot d -serial "file:$work/install.log" \
-  -monitor "unix:$work/mon.sock,server,nowait" \
-  || { echo "vm-test: install did not finish (see install.log, install-screen.ppm)" >&2; exit 1; }
-kill "$screens_pid" 2>/dev/null || true
+  || { echo "vm-test: install did not finish (see install.log)" >&2; exit 1; }
 
 # The TPM state carries over: swtpm keeps running between the two boots.
 echo "vm-test: first boot (up to $boot_min min)"
