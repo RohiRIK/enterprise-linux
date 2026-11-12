@@ -49,6 +49,11 @@ class Autoinstall(unittest.TestCase):
         self.assertEqual(doc["identity"]["username"], "eltest")
         self.assertIn("--ci-report", doc["late-commands"][0])
 
+    def test_keyboard_variant_per_layout(self):
+        kb = render.check(render.render(TEMPLATE, BASE))["autoinstall"]["keyboard"]
+        self.assertEqual(len(kb["layout"].split(",")), len(kb.get("variant", "").split(",")),
+                         "subiquity crashes on layouts without matching variants")
+
     def test_hardening_packages_listed(self):
         doc = yaml.safe_load(render.render(TEMPLATE, BASE))["autoinstall"]
         tsv = os.path.join(IMAGE, "..", "security", "hardening", "data", "packages.tsv")
@@ -82,11 +87,11 @@ menuentry "Ubuntu (safe graphics)" {
 
 
 class PatchGrub(unittest.TestCase):
-    def run_patch(self, cfg, extra):
+    def run_patch(self, cfg, extra, *opts):
         with tempfile.NamedTemporaryFile("w", suffix=".cfg", delete=False) as f:
             f.write(cfg)
         try:
-            r = subprocess.run([sys.executable, os.path.join(IMAGE, "patch-grub.py"), f.name, extra],
+            r = subprocess.run([sys.executable, os.path.join(IMAGE, "patch-grub.py"), f.name, extra, *opts],
                                capture_output=True, text=True)
             return r, open(f.name).read()
         finally:
@@ -105,6 +110,24 @@ class PatchGrub(unittest.TestCase):
         r, out = self.run_patch(GRUB, "")
         self.assertEqual(r.returncode, 0)
         self.assertIn("/casper/vmlinuz  --- quiet splash", out)
+
+    def test_verbose_drops_quiet_splash(self):
+        r, out = self.run_patch(GRUB, "autoinstall", "--verbose")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for line in out.splitlines():
+            if line.strip().startswith("linux"):
+                self.assertNotIn("quiet", line.split())
+                self.assertNotIn("splash", line.split())
+        self.assertIn("patch-grub: linux", r.stdout)
+
+    def test_require_present(self):
+        r, _ = self.run_patch(GRUB, "autoinstall", "--require", "autoinstall")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_require_missing_fails(self):
+        r, _ = self.run_patch(GRUB, "", "--require", "autoinstall")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("lacks 'autoinstall'", r.stderr)
 
     def test_no_casper(self):
         r, _ = self.run_patch("set timeout=1\n", "autoinstall")
