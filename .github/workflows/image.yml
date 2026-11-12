@@ -89,7 +89,10 @@ jobs:
                   data = data.replace(s.encode(), b"[REDACTED]")
               open(path, "wb").write(data)
           PY
-          ! grep -rqF -f "$RUNNER_TEMP/el-secrets" vm/ 2>/dev/null
+          # Check only what gets uploaded, never disk.qcow2, TPM or OVMF state.
+          files=(vm/*.log)
+          [ -f vm/screen.ppm ] && files+=(vm/screen.ppm)
+          [ ${#files[@]} -eq 0 ] || ! grep -qaF -f "$RUNNER_TEMP/el-secrets" -- "${files[@]}"
       - name: Logs
         if: always()
         uses: actions/upload-artifact@v4
