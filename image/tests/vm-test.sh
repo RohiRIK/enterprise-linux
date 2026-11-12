@@ -45,8 +45,16 @@ work="$(cd "$work" && pwd)"
 cp "$ovmf_vars" "$work/vars.fd"
 qemu-img create -f qcow2 "$work/disk.qcow2" 40G >/dev/null
 
-swtpm socket --tpm2 --tpmstate "dir=$work/tpm" --ctrl "type=unixio,path=$work/tpm.sock" \
-  --daemon --pid "file=$work/swtpm.pid" --log "file=$work/swtpm.log"
+# QEMU shuts swtpm down when it powers off, so each boot gets a fresh swtpm.
+# The TPM state lives in $work/tpm and carries over between boots.
+start_swtpm() {
+  rm -f "$work/tpm.sock"
+  swtpm socket --tpm2 --tpmstate "dir=$work/tpm" --ctrl "type=unixio,path=$work/tpm.sock" \
+    --daemon --pid "file=$work/swtpm.pid" --log "file=$work/swtpm.log"
+  for _ in $(seq 50); do [ -S "$work/tpm.sock" ] && return 0; sleep 0.1; done
+  echo "vm-test: swtpm did not start (see swtpm.log)" >&2; exit 1
+}
+start_swtpm
 trap 'kill "$(cat "$work/swtpm.pid" 2>/dev/null)" 2>/dev/null || true' EXIT
 
 accel=tcg
@@ -124,8 +132,8 @@ while kill -0 "$qemu_pid" 2>/dev/null; do
 done
 wait "$qemu_pid" || { echo "vm-test: qemu exited with an error during install (see install.log)" >&2; exit 1; }
 
-# The TPM state carries over: swtpm keeps running between the two boots.
 echo "vm-test: first boot (up to $boot_min min)"
+start_swtpm
 timeout "$((boot_min * 60))" qemu-system-x86_64 "${qemu_args[@]}" -serial "file:$work/boot.log" \
   || { echo "vm-test: first boot did not power off (see boot.log)" >&2; exit 1; }
 
