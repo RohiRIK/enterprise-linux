@@ -114,6 +114,9 @@ while kill -0 "$qemu_pid" 2>/dev/null; do
       fail_install "autoinstall did not start: no curtin output or disk writes after $start_min min"
     fi
   fi
+  if grep -qE 'subiquity/Error|ErrorReporter|Something went wrong' "$work/install.log"; then
+    fail_install "installer crashed (subiquity error report)"
+  fi
   [ $((now - last_change)) -ge $((quiet_min * 60)) ] && fail_install "install.log silent for $quiet_min min"
   [ $((now - start)) -ge $((install_min * 60)) ] && fail_install "install did not finish in $install_min min"
 done

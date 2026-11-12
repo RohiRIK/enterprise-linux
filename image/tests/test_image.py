@@ -49,6 +49,11 @@ class Autoinstall(unittest.TestCase):
         self.assertEqual(doc["identity"]["username"], "eltest")
         self.assertIn("--ci-report", doc["late-commands"][0])
 
+    def test_keyboard_variant_per_layout(self):
+        kb = render.check(render.render(TEMPLATE, BASE))["autoinstall"]["keyboard"]
+        self.assertEqual(len(kb["layout"].split(",")), len(kb.get("variant", "").split(",")),
+                         "subiquity crashes on layouts without matching variants")
+
     def test_hardening_packages_listed(self):
         doc = yaml.safe_load(render.render(TEMPLATE, BASE))["autoinstall"]
         tsv = os.path.join(IMAGE, "..", "security", "hardening", "data", "packages.tsv")
