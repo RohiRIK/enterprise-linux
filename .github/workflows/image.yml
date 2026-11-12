@@ -76,6 +76,7 @@ jobs:
       - name: Install and boot in a VM
         run: image/tests/vm-test.sh --iso out/enterprise-linux-*-ci.iso --work vm
       - name: Scrub secrets from logs
+        id: scrub
         if: always()
         run: |
           [ -r "$RUNNER_TEMP/el-secrets" ] || exit 0
@@ -92,9 +93,12 @@ jobs:
           # Check only what gets uploaded, never disk.qcow2, TPM or OVMF state.
           files=(vm/*.log)
           [ -f vm/screen.ppm ] && files+=(vm/screen.ppm)
-          [ ${#files[@]} -eq 0 ] || ! grep -qaF -f "$RUNNER_TEMP/el-secrets" -- "${files[@]}"
+          [ ${#files[@]} -eq 0 ] && exit 0
+          # grep exits 1 for no match; 0 (a secret) and 2 (an error) both fail.
+          rc=0; grep -qaF -f "$RUNNER_TEMP/el-secrets" -- "${files[@]}" || rc=$?
+          [ "$rc" -eq 1 ] || { echo "secret check failed (grep rc=$rc), not uploading" >&2; exit 1; }
       - name: Logs
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: vm-logs
@@ -102,7 +106,7 @@ jobs:
       # An image the text scrub cannot redact: CI-only secrets, fresh per run,
       # kept for one day.
       - name: Screenshot
-        if: always()
+        if: always() && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: vm-screen
